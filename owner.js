@@ -1,9 +1,10 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { Type } from '@earendil-works/pi-ai';
-import { Harness, createRegistry, defineDoc, defineTool, defineExtension, section } from '@earendil-works/pi-durable';
+import { Harness, AgentDoc, createRegistry, defineDoc, defineTool, defineExtension, section } from '@earendil-works/pi-durable';
 import { JsonlStorage } from '@earendil-works/pi-durable/storage/jsonl';
 import { IndexedDBFileSystem } from './idb-fs.js';
 import { browserModels } from './proxy-model.js';
+import { createSubagents } from './subagents.js';
 
 const userId = new URL(self.location.href).searchParams.get('user');
 if (!/^[a-zA-Z0-9_-]{1,64}$/.test(userId || '')) throw new Error('Invalid user namespace');
@@ -13,43 +14,74 @@ async function confirmedUser() {
   if (user?.id !== userId) throw new Error('Session changed; sign in again');
   return user;
 }
-const ownerId = crypto.randomUUID();
 const ports = new Set();
-const state = { userId, ownerId, buildId: APP_BUILD_ID, view: null, notes: null, openedAt: Date.now(), recovered: null };
+const state = { userId, ownerId: crypto.randomUUID(), buildId: APP_BUILD_ID, conversations: {}, openedAt: Date.now(), recovered: null };
 const Notes = defineDoc({ kind: 'tab.notes', version: 1, scope: 'conversation',
   history: 'rewindable', fork: 'asOf', initial: () => ({ text: '' }) });
+const Workspace = defineDoc({ kind: 'tab.workspace', version: 1, scope: 'conversation',
+  history: 'rewindable', fork: 'asOf', initial: () => ({ files: {} }) });
+const Branches = defineDoc({ kind: 'tab.branches', version: 1, scope: 'session', history: 'latest', initial: () => ({ nodes: {} }) });
+const encoder = new TextEncoder();
+const bytes = value => encoder.encode(value).length;
+const FILE_LIMIT = 32 * 1024;
+const WORKSPACE_LIMIT = 128 * 1024;
 const text = value => ({ content: [{ type: 'text', text: value }] });
 let root;
 let harness;
 let fs;
+let catalog;
 let resolveInitialization;
 let rejectInitialization;
-const initialization = new Promise((resolve, reject) => {
-  resolveInitialization = resolve;
-  rejectInitialization = reject;
-});
+const initialization = new Promise((resolve, reject) => { resolveInitialization = resolve; rejectInitialization = reject; });
 void initialization.catch(() => {});
 let ownsLock = false;
 const waiting = setTimeout(() => {
-  if (!ownsLock) {
-    state.waitingForOwner = true;
-    broadcast({ type: 'waiting' });
-  }
+  if (!ownsLock) { state.waitingForOwner = true; broadcast({ type: 'waiting' }); }
 }, 500);
 
-async function configure(change = {}) {
-  const agent = await root.agent(context);
+function broadcast(frame) { for (const port of ports) port.postMessage(frame); }
+function publish() { broadcast({ type: 'state', state }); }
+function filePath(input) {
+  const path = input.replace(/^\/workspace\//, '').replace(/^\.\//, '');
+  if (!path || path.startsWith('/') || path.split('/').some(part => !part || part === '..' || part === '.')) throw new Error('Use a relative path inside /workspace');
+  return path;
+}
+function checkModel(model) {
+  if (model && !catalog.some(item => item.provider === model.provider && item.id === model.modelId)) throw new Error('Unknown model');
+}
+async function configure(conversation, change = {}) {
+  const agent = await conversation.agent(context);
   if (agent.thinkingLevel === 'minimal') change.thinkingLevel = 'low';
   if (change.model?.provider === agent.model?.provider && change.model?.modelId === agent.model?.modelId) delete change.model;
-  if (Object.keys(change).length) await root.configure(change, context);
+  if (Object.keys(change).length) await conversation.configure(change, context);
+}
+const attaching = new Map();
+function attachConversation(id) {
+  if (attaching.has(id)) return attaching.get(id);
+  const attached = (async () => {
+    const conversation = await harness.conversation(id, context);
+    if (!conversation) throw new Error('Conversation not found');
+    await configure(conversation);
+    const node = (await harness.snapshot(Branches, context)).nodes[id];
+    const record = state.conversations[id] = { ...node };
+    const watches = [['view', await conversation.watch(context)],
+      ['notes', await harness.watchDoc(Notes, id, context)],
+      ['files', await harness.watchDoc(Workspace, id, context)],
+      ['agent', await harness.watchDoc(AgentDoc, id, context)]];
+    for (const [channel, watch] of watches) {
+      if (!watch) continue;
+      record[channel] = watch.value;
+      watch.start(async value => { record[channel] = value; publish(); });
+    }
+    publish();
+  })();
+  attaching.set(id, attached);
+  return attached;
 }
 
-function broadcast(frame) {
-  for (const port of ports) port.postMessage(frame);
-}
-
+// The tab executes arbitrary JS; the owner only brokers requests and durable files.
 const evaluations = new Map();
-function evaluate(code, files, signal) {
+function requestTab(type, payload, signal) {
   return new Promise((resolve, reject) => {
     const port = ports.values().next().value;
     if (!port) return reject(new Error('No tab available for evaluation'));
@@ -64,7 +96,7 @@ function evaluate(code, files, signal) {
     const timeout = setTimeout(() => finish(new Error('Evaluation tab unavailable or timed out')), 6000);
     signal?.addEventListener('abort', abort, { once: true });
     evaluations.set(id, finish);
-    port.postMessage({ type: 'evaluate', id, code, files });
+    port.postMessage({ type, id, ...payload });
   });
 }
 
@@ -74,47 +106,46 @@ const ready = navigator.locks.request(`pi-in-a-tab-owner:${userId}`, async () =>
   state.waitingForOwner = false;
   await confirmedUser();
   fs = await IndexedDBFileSystem.open(`pi-in-a-tab:${userId}`);
-  await fs.createDir('/workspace', { recursive: true });
-  if (!(await fs.exists('/workspace/example.json')).value) {
-    await fs.writeFile('/workspace/example.json', '{"values":[3,5,8],"label":"browser-only"}');
-  }
   const tools = [
-    defineTool({ name: 'read_file', description: 'Read a browser virtual file, relative to /workspace.',
-      replay: 'safe', parameters: Type.Object({ path: Type.String() }), execute: async args => {
-        const path = fs.path('/workspace/' + args.path);
-        if (!path.startsWith('/workspace/')) throw new Error('Outside workspace');
-        const result = await fs.readTextFile(path);
-        if (!result.ok) throw result.error;
-        return text(result.value);
+    defineTool({ name: 'read_file', description: 'Read a file from this conversation’s /workspace. Forks have independent files.',
+      replay: 'safe', parameters: Type.Object({ path: Type.String() }), execute: async (args, api, ctx) => {
+        const path = filePath(args.path);
+        const files = (await api.snapshot(Workspace, api.conversationId, ctx))?.files || {};
+        if (!Object.hasOwn(files, path)) throw new Error('Missing /workspace/' + path);
+        return text(files[path]);
       } }),
-    defineTool({ name: 'write_file', description: 'Write a browser virtual file. Mutating: never automatically replayed.',
-      replay: 'unsafe', parameters: Type.Object({ path: Type.String(), content: Type.String() }), execute: async args => {
-        const path = fs.path('/workspace/' + args.path);
-        if (!path.startsWith('/workspace/')) throw new Error('Outside workspace');
-        const result = await fs.writeFile(path, args.content);
-        if (!result.ok) throw result.error;
-        return text('Saved ' + path);
+    defineTool({ name: 'write_file', description: 'Write this conversation’s /workspace file. Maximum 32 KiB UTF-8 per file and 128 KiB serialized workspace. Forks never overwrite each other. Mutating: not automatically replayed.',
+      replay: 'unsafe', parameters: Type.Object({ path: Type.String(), content: Type.String() }), execute: async (args, api, ctx) => {
+        const path = filePath(args.path);
+        if (bytes(args.content) > FILE_LIMIT) throw new Error('File exceeds 32 KiB');
+        await api.commit(async tx => {
+          const workspace = await tx.doc(Workspace, api.conversationId);
+          const next = { ...workspace.files, [path]: args.content };
+          if (bytes(JSON.stringify({ files: next })) > WORKSPACE_LIMIT) throw new Error('Workspace exceeds 128 KiB');
+          workspace.files[path] = args.content;
+        }, ctx);
+        return text('Saved /workspace/' + path);
       } }),
-    defineTool({ name: 'js_eval', description: 'Run JavaScript in a fresh Web Worker. Supply a function body with return. fs.list() and fs.read(path) read a frozen virtual-file snapshot. Arbitrary JS is NOT replay-safe.',
+    defineTool({ name: 'js_eval', description: 'Run JavaScript in a fresh Web Worker. Supply a function body with return. fs.list() and fs.read(path) read a frozen snapshot of this conversation’s files. Arbitrary JS is NOT replay-safe.',
       replay: 'unsafe', parameters: Type.Object({ code: Type.String() }), execute: async (args, api, ctx) => {
-        const files = {};
-        for (const file of (await fs.listDir('/workspace')).value) {
-          if (file.kind === 'file') files[file.name] = (await fs.readTextFile(file.path)).value;
-        }
-        return text(await evaluate(args.code, files, ctx.abortSignal));
+        const files = (await api.snapshot(Workspace, api.conversationId, ctx))?.files || {};
+        return text(await requestTab('evaluate', { code: args.code, files }, ctx.abortSignal));
       } }),
-    defineTool({ name: 'set_notes', description: 'Replace the durable notes document. Mutating: never automatically replayed.',
+    defineTool({ name: 'set_notes', description: 'Replace this conversation’s durable notes (32 KiB maximum). Forks inherit notes as of the fork entry. Mutating: not automatically replayed.',
       replay: 'unsafe', parameters: Type.Object({ text: Type.String() }), execute: async (args, api, ctx) => {
+        if (bytes(args.text) > FILE_LIMIT) throw new Error('Notes exceed 32 KiB');
         await api.commit(async tx => { (await tx.doc(Notes, api.conversationId)).text = args.text; }, ctx);
         return text('Notes saved');
       } })
   ];
   const registry = createRegistry();
   registry.install(defineExtension({ name: 'browser-local', tools, sections: [section('preamble', () =>
-    'You live entirely inside a browser SharedWorker. Conversation state, notes and virtual files are in browser IndexedDB. Be concise. Never repeat successful tools.', { tag: false })] }));
-  const { models: catalog, defaultModel } = await (await fetch('/api/models')).json();
+    'You live entirely inside a browser SharedWorker. Conversations, notes and virtual files are in browser IndexedDB. Files and notes are private to your conversation; forks inherit them at the fork point. Be concise. Never repeat successful tools. Use delegate with a tasks array to run up to three independent subagents in parallel and compose their answers. Use delegate_background when the user wants you to answer immediately and receive the result later.', { tag: false })] }));
+  registry.install(createSubagents({ Notes, Workspace, Branches, onConversation: attachConversation }));
+  const available = await (await fetch('/api/models')).json();
+  catalog = available.models;
   if (!catalog.length) throw new Error('No model credentials; configure a key or run npm run login');
-  const initial = catalog.find(model => model.provider + '/' + model.id === defaultModel) || catalog[0];
+  const initial = catalog.find(model => model.provider + '/' + model.id === available.defaultModel) || catalog[0];
   const storage = await JsonlStorage.open('/session', fs, context, { fsync: true });
   harness = await Harness.open(storage, { models: browserModels(catalog, userId), registry,
     settings: { retry: { enabled: false }, stream: { timeoutMs: 120000 } },
@@ -123,17 +154,38 @@ const ready = navigator.locks.request(`pi-in-a-tab-owner:${userId}`, async () =>
     agent: { model: { provider: initial.provider, modelId: initial.id }, thinkingLevel: 'low' },
     init: async (tx, id) => { await tx.doc(Notes, id); }
   });
-  await configure();
-  state.recovered = await harness.inspect(context);
-  for (const [channel, watch] of [['view', await root.watch(context)], ['notes', await harness.watchDoc(Notes, root.id, context)]]) {
-    state[channel] = watch.value;
-    watch.start(async value => {
-      state[channel] = value;
-      broadcast({ type: 'state', state });
+  state.rootId = root.id;
+  // Best-effort one-time import. JSONL still uses idb-fs; workspace tools no longer do.
+  if (!(await harness.snapshot(Workspace, root.id, context))) {
+    const imported = { 'example.json': '{"values":[3,5,8],"label":"browser-only"}' };
+    const legacy = await fs.transaction('readonly', (store, set) => {
+      const request = store.getAll();
+      request.onsuccess = () => set(request.result.filter(file => file.kind === 'file' && file.path.startsWith('/workspace/')));
     });
+    for (const file of legacy.ok ? legacy.value : []) {
+      const content = new TextDecoder().decode(file.bytes);
+      const path = file.path.slice('/workspace/'.length);
+      if (bytes(content) <= FILE_LIMIT && bytes(JSON.stringify({ files: { ...imported, [path]: content } })) <= WORKSPACE_LIMIT) imported[path] = content;
+    }
+    await root.commit(async tx => { (await tx.doc(Workspace, root.id)).files = imported; }, context);
+    await fs.remove('/workspace', { recursive: true, force: true });
   }
+  await harness.commit(async tx => {
+    const branches = await tx.doc(Branches);
+    branches.nodes[root.id] = { id: root.id, parentId: null, kind: 'root', title: 'Root' };
+  }, context);
+  state.recovered = await harness.inspect(context);
+  const branches = await harness.watchDoc(Branches, context);
+  await Promise.all(Object.keys(branches.value.nodes).map(id => attachConversation(Number(id))));
+  branches.start(async value => {
+    for (const node of Object.values(value.nodes)) {
+      await attachConversation(node.id);
+      Object.assign(state.conversations[node.id], node);
+    }
+    publish();
+  });
   resolveInitialization();
-  broadcast({ type: 'state', state });
+  publish();
   harness.resume();
   return new Promise(() => {}); // Own the lock for this worker's lifetime.
 });
@@ -145,7 +197,7 @@ self.onconnect = event => {
   port.postMessage({ type: 'hello', buildId: APP_BUILD_ID });
   if (state.waitingForOwner) port.postMessage({ type: 'waiting' });
   port.onmessage = async event => {
-    const { id, action, payload } = event.data;
+    const { id, action, payload = {} } = event.data;
     try {
       if (action === 'eval-result') {
         evaluations.get(id)?.(payload.error ? new Error(payload.error) : null, payload.result);
@@ -164,23 +216,46 @@ self.onconnect = event => {
       }
       let result;
       if (action === 'attach') result = state;
-      else if (action === 'model') {
-        await configure({ model: { provider: payload.provider, modelId: payload.modelId } });
-        result = { saved: true };
-      } else if (action === 'submit') {
-        const submission = await root.submit({ type: 'input', content: payload.content,
-          requestId: payload.requestId, whenBusy: 'followUp' }, context);
-        result = { id: submission.id };
-      } else if (action === 'notes') {
-        await root.commit(async tx => { (await tx.doc(Notes, root.id)).text = payload.text; }, context);
-        result = { saved: true };
+      else {
+        const conversationId = payload.conversationId ?? root.id;
+        if (!state.conversations[conversationId]) throw new Error('Unknown conversation');
+        const conversation = await harness.conversation(conversationId, context);
+        if (action === 'model') {
+          const model = { provider: payload.provider, modelId: payload.modelId };
+          checkModel(model);
+          await configure(conversation, { model });
+          result = { saved: true };
+        } else if (action === 'submit') {
+          const submission = await conversation.submit({ type: 'input', content: payload.content,
+            requestId: payload.requestId, whenBusy: 'followUp' }, context);
+          result = { id: submission.id };
+        } else if (action === 'notes') {
+          if (bytes(payload.text) > FILE_LIMIT) throw new Error('Notes exceed 32 KiB');
+          await conversation.commit(async tx => { (await tx.doc(Notes, conversationId)).text = payload.text; }, context);
+          result = { saved: true };
+        } else if (action === 'fork') {
+          if (!Array.isArray(payload.branches) || payload.branches.length < 1 || payload.branches.length > 4) throw new Error('Choose 1–4 branches');
+          for (const branch of payload.branches) checkModel(branch.model);
+          const children = await Promise.all(payload.branches.map((branch, index) => conversation.fork(payload.entryId, {
+            ownership: { kind: 'ownerless' },
+            agent: { ...(branch.model ? { model: branch.model } : {}), thinkingLevel: 'low' },
+            init: async (tx, childId) => {
+              await tx.doc(Notes, childId);
+              await tx.doc(Workspace, childId);
+              (await tx.doc(Branches)).nodes[childId] = { id: childId, parentId: conversationId, kind: 'fork', title: branch.title || `Fork ${index + 1} · #${payload.entryId}` };
+            }
+          }, context)));
+          await Promise.all(children.map(child => attachConversation(child.id)));
+          await Promise.all(children.map((child, index) => payload.branches[index].instruction?.trim()
+            ? child.submit({ type: 'input', content: payload.branches[index].instruction, requestId: `fork:${child.id}` }, context) : undefined));
+          result = { conversationIds: children.map(child => child.id) };
+        } else throw new Error('Unknown action: ' + action);
       }
-      else throw new Error('Unknown action: ' + action);
       port.postMessage({ type: 'reply', id, result });
     } catch (error) { port.postMessage({ type: 'reply', id, error: error.message }); }
   };
 };
 ready.catch(error => {
   rejectInitialization(error);
-  broadcast({ type: 'error', error: error.message });
+  broadcast({ type: 'error', error: String(error) });
 });

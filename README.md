@@ -2,6 +2,25 @@
 
 A small, local-first way to run Pi Durable in a browser without installing the Pi coding agent. The whole agent harness runs in a SharedWorker, with conversation history, notes, and virtual files persisted in IndexedDB. A tiny Node server serves the app and forwards model calls using **your own** model credentials; it never saves your conversations. Reload or open another tab and pick up where you left off.
 
+**Experimental demo — not safe for production or untrusted users.** This is a just-for-fun exploration of what Pi Durable unlocks, not a hardened agent service. Only use it with people you trust and credentials you are comfortable spending.
+
+## Branch workspace
+
+- A nested conversation tree and one to four live panes, each with its own model, transcript, notes, files, and composer. Click a branch to watch it.
+- Fork any transcript entry once or into two to four branches. Give each branch an optional instruction and model; instructed branches start in parallel. Forks of forks work.
+- Files and notes are rewindable conversation documents: forks inherit them **as of the selected entry**, then change independently. Files are capped at 32 KiB UTF-8 each and the serialized workspace at 128 KiB; notes at 32 KiB. Existing small `/workspace` files are imported into the root once, best effort. The IndexedDB filesystem now only backs the durable JSONL log.
+- `delegate` runs one to three child conversations in parallel and returns their answers to the parent's tool call. `delegate_background` lets the parent answer immediately and delivers a durable follow-up when each child finishes. Both appear under their parent in the tree. Runaway protection: two subagent levels, twelve children per parent, three per call.
+
+### Five-minute demo
+
+1. Set `PI_TAB_RATE_LIMIT=120` before starting if comparing several tool-using agents (the default remains 20 model requests/minute per signed-in user).
+2. Ask the root: “Write `comparison.txt` containing ROOT, save notes saying ROOT NOTES, then reply ready.” Wait for the final reply.
+3. On that final reply, choose **Fork ×N**, select two branches, and give each an instruction to read then change `comparison.txt` differently. Pick Azure for one and Codex for the other if both are configured. Watch them beside the root; expand each pane's files to compare. Reload: the branches, files, and notes remain.
+4. Ask the parent: “Use delegate with three tasks in one call: a product pitch, a skeptic's objection, and a technical explanation of browser-local agents. Compose their answers.” Open the three children from the tree while they stream.
+5. Ask: “Use delegate_background for a detailed comparison of browser-local versus server-side agents; immediately say you'll report back.” The parent replies first; the child's answer arrives later as a follow-up. Reload mid-run to observe recovery.
+
+This demonstrates a native conversation/task/document runtime in the user's browser, not a claim that LangGraph lacks persistence or time travel. No custom orchestration graph or server-side transcript database is involved.
+
 ## Quickstart
 
 Install **Node 22.19.0 or newer** (Pi-ai's minimum; this app also uses Node's built-in `.env` loader). Download this repo, then run these three commands:
@@ -24,7 +43,7 @@ Credentials are discovered in this order:
 3. **Subscription OAuth:** run `npm run login` and choose a provider, or `npm run login -- openai-codex` (also Anthropic, GitHub Copilot, and the other OAuth providers offered by Pi-ai). This wraps Pi-ai's own interactive OAuth CLI. Logins go to ignored, owner-only `auth.json` in this repo, deliberately keeping new logins separate from an existing Pi installation.
 4. **Already use Pi? It just works:** existing credentials in `~/.pi/agent/auth.json` are read automatically, before the repo-local login file. Pi-ai resolves credentials and refreshes OAuth tokens; refreshed tokens are written back to their original store under a Pi-compatible file lock. No credential values are logged or sent to the browser.
 
-Restart the server and reload after changing configuration. `/api/models` lists only credentialed providers' chat models; a configured credential is not a guarantee that your account can access every model. Pi-ai refreshes dynamic provider catalogs at startup when credentials are available. Use the model picker; its selection is remembered separately for each app user in browser storage. Set `PI_MODEL=provider/modelId` for the initial default (for example `openai-codex/gpt-6.1-sol`); unavailable defaults fall back to an available model. Browser choices take precedence.
+Restart the server and reload after changing configuration. `/api/models` lists only credentialed providers' chat models; a configured credential is not a guarantee that your account can access every model. Pi-ai refreshes dynamic provider catalogs at startup when credentials are available. Each conversation's model selection is persisted in its durable agent document. Set `PI_MODEL=provider/modelId` for a new root's initial default (for example `openai-codex/gpt-6.1-sol`); unavailable defaults fall back to an available model. Existing conversations keep their own model.
 
 After an app update, an older open tab can still own the browser-local agent. If you see “This app was updated” or “Waiting for an older tab to close”, close the other tabs for this site and reload. Your conversation is kept; old `minimal` thinking settings are upgraded to `low` when reopened. Provider failures appear as model errors in the transcript.
 
@@ -42,7 +61,7 @@ tailscale serve --bg http://127.0.0.1:4474
 
 Only devices permitted by your tailnet policy can reach that URL. `PI_ALLOWED_ORIGINS` is a comma-separated list of exact origins, without paths or trailing slashes. Use HTTPS so SharedWorker and Web Locks are available away from localhost. `tailscale serve off` stops sharing. For LAN use, `HOST=0.0.0.0` binds all interfaces, but the server refuses non-loopback binding without `PI_TAB_USERS`. `PORT` changes the port (default 4474). A localhost reverse proxy still needs accounts even though its upstream is loopback: without `PI_TAB_USERS` the server refuses to start with a non-loopback `PI_ALLOWED_ORIGINS` and rejects requests carrying common proxy headers (`Forwarded`, `X-Forwarded-*`, `X-Real-IP`, Tailscale, Cloudflare). A proxy that strips those headers and rewrites `Host` to localhost defeats that check, so never expose a no-accounts instance.
 
-Usernames use letters, digits, `_` or `-`; passwords may contain colons but not commas. Passwords are scrypt-hashed in memory at startup. A signed, HttpOnly, SameSite cookie identifies the account; HTTPS origins get Secure cookies. App-account mode allows 20 model requests/minute per user. Logout revokes that session on the server and detaches tabs; revocations are kept in memory, so a server restart re-admits logged-out cookies until their 12-hour expiry (delete `.session-secret` and restart to invalidate every session). Erase-device closes the owner and removes that account's IndexedDB history and model preference. Close other tabs if the browser reports that deletion is blocked. Put configuration in ignored `.env` rather than committing it.
+Usernames use letters, digits, `_` or `-`; passwords may contain colons but not commas. Passwords are scrypt-hashed in memory at startup. A signed, HttpOnly, SameSite cookie identifies the account; HTTPS origins get Secure cookies. App-account mode allows 20 model requests/minute per user by default; `PI_TAB_RATE_LIMIT` sets a positive integer requests/minute allowance (e.g. `120` for parallel demos). Sign-in attempts retain their separate 20/minute limit. Logout revokes that session on the server and detaches tabs; revocations are kept in memory, so a server restart re-admits logged-out cookies until their 12-hour expiry (delete `.session-secret` and restart to invalidate every session). Erase-device closes the owner and removes that account's IndexedDB history and pane preferences. Close other tabs if the browser reports that deletion is blocked. Put configuration in ignored `.env` rather than committing it.
 
 ## How it works
 
@@ -56,12 +75,12 @@ Browser tabs ── SharedWorker (Pi Durable harness + Web Lock)
                                       model provider
 ```
 
-The same account's tabs share one worker. Each account has separate worker, IndexedDB, Web Lock, and model-preference names. Tools read/write a browser-only virtual workspace, update durable notes, or run JavaScript in a disposable worker. Safe reads can replay after recovery; writes and arbitrary JavaScript are marked unsafe and are not automatically replayed. CSP locks the app to its own origin; the JavaScript evaluator has `connect-src 'none'` and cannot create nested workers.
+The same account's tabs share one worker and every conversation's live stream. Each account has separate worker, IndexedDB, Web Lock, and pane-preference names. Tools read/write conversation-scoped workspace documents, update durable notes, or run JavaScript in a disposable worker against that conversation's frozen file snapshot. Forks use native `Conversation.fork()` and rewindable `fork: 'asOf'` documents. Foreground delegates own children through their tool task; background delegates use native anchor and reporter tasks with idempotent submission IDs. Safe reads and foreground delegation can replay after recovery; file writes and arbitrary JavaScript are marked unsafe and are not automatically replayed. CSP locks the app to its own origin; the JavaScript evaluator has `connect-src 'none'` and cannot create nested workers.
 
 ## Limits and trust
 
 - State lives in **that browser profile and origin**, not on the Node server. Different devices, profiles, or URLs do not share history.
-- Closing all tabs pauses the agent. Reopening restores persisted work; a reload while another tab/worker survives can keep a stream running. The browser may terminate background workers, and interrupted generations may be restarted rather than retain the exact token stream.
+- Closing all tabs pauses the agent. Reopening restores persisted work; a reload while another tab/worker survives can keep a stream running. The browser may terminate background workers. In the Chromium demo, reloading mid-delegation created a new owner, restored the same three child IDs and parent tool call, restarted interrupted model generations from their saved request phase, and completed the parent's composed answer without duplicate children. It does not retain the exact in-flight token stream.
 - Browser storage can be evicted or cleared. This is not a backup system.
 - Your model provider sees prompts and tool results. The server keeps credentials locally but forwards requests to that provider.
 - The JavaScript tool can read the user's own browser-origin data, including IndexedDB. It cannot fetch out under its CSP. App-account namespacing is not a security sandbox against hostile JavaScript on the same origin: only share with people you trust.

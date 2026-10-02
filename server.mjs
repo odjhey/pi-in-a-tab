@@ -10,6 +10,8 @@ await loadEnvironment();
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 4474);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be between 1 and 65535');
+const modelRateLimit = Number(process.env.PI_TAB_RATE_LIMIT || 20);
+if (!Number.isInteger(modelRateLimit) || modelRateLimit < 1) throw new Error('PI_TAB_RATE_LIMIT must be a positive integer');
 const isLoopback = name => name === 'localhost' || name === '::1' || name === '[::1]' || /^127(?:\.(?:\d{1,3})){3}$/.test(name);
 const loopback = isLoopback(host);
 if (!loopback && !process.env.PI_TAB_USERS) throw new Error('Non-loopback HOST requires PI_TAB_USERS');
@@ -67,10 +69,10 @@ async function body(req) {
   }
   return JSON.parse(raw || '{}');
 }
-function admit(key) {
+function admit(key, limit = 20) {
   const now = Date.now();
   const recent = (limits.get(key) || []).filter(at => at > now - 60000);
-  if (recent.length >= 20) return false;
+  if (recent.length >= limit) return false;
   recent.push(now);
   limits.set(key, recent);
   return true;
@@ -125,9 +127,9 @@ const server = createServer(async (req, res) => {
     const available = await models.getAvailable(input.provider);
     const model = available.find(model => model.id === input.modelId && model.provider === input.provider);
     if (!model) return json(res, 400, { error: 'Selected model has no configured credentials' });
-    if (loginRequired && !admit('model:' + user.id)) {
+    if (loginRequired && !admit('model:' + user.id, modelRateLimit)) {
       res.setHeader('Retry-After', '60');
-      return json(res, 429, { error: '20 model requests per minute per user; wait one minute' });
+      return json(res, 429, { error: `${modelRateLimit} model requests per minute per user; wait one minute` });
     }
     const abort = new AbortController();
     res.on('close', () => abort.abort());

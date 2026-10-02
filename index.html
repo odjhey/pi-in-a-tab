@@ -3,82 +3,124 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Pi in a tab</title>
+    <title>Pi in a tab · Branch workspace</title>
     <style>
-      body { margin: 0; background: #101820; color: #edf3f5; font: 15px system-ui; }
+      :root { color-scheme: dark; --bg: #0b1219; --surface: #111d27; --line: #2a3b49; --muted: #99afbd; --accent: #8de1c5; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: #e9f0f5; font: 14px system-ui, sans-serif; }
       [hidden] { display: none !important; }
-      #login, #setup { max-width: 520px; margin: 24px auto; }
-      #account { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-      input, select, textarea { box-sizing: border-box; width: 100%; padding: 12px; margin: 8px 0; background: #0c151c; color: white; border: 1px solid #4a6878; border-radius: 7px; }
-      header, main { max-width: 1150px; margin: auto; padding: 22px; }
-      header { border-bottom: 1px solid #30424e; }
-      h1 { margin: 0 0 10px; font-size: 28px; }
-      p { color: #b3c6ce; }
-      main { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; }
-      section { background: #172630; border: 1px solid #30424e; border-radius: 12px; padding: 18px; }
-      button { background: #83dec7; color: #102a24; border: none; padding: 10px 14px; margin-top: 8px; border-radius: 6px; cursor: pointer; }
-      .message { border-bottom: 1px solid #30424e; padding: 14px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-      small { color: #85bdb7; display: block; margin-bottom: 6px; }
-      pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
-      #error, #login-error { color: #ffaba7; }
-      #live, #login-message { color: #83dec7; }
-      @media (max-width: 750px) { main { grid-template-columns: 1fr; } }
+      button, input, select, textarea { font: inherit; }
+      button { border: 1px solid transparent; border-radius: 7px; padding: 8px 12px; background: var(--accent); color: #12352a; cursor: pointer; }
+      button:hover { filter: brightness(1.12); }
+      button:disabled { opacity: .45; cursor: default; }
+      button.secondary { background: #1b2c38; color: #c8d9e3; border-color: var(--line); }
+      button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+      input, select, textarea { width: 100%; padding: 10px; background: #0c161f; color: #e9f0f5; border: 1px solid #3a5060; border-radius: 7px; }
+      textarea { resize: vertical; }
+      label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 5px; }
+      h1, h2, h3, p { margin-top: 0; }
+      h1 { font-size: 23px; margin-bottom: 4px; letter-spacing: -.7px; }
+      h2 { font-size: 18px; }
+      p { color: var(--muted); line-height: 1.6; }
+      small { color: var(--muted); }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 ui-monospace, monospace; }
+      .masthead { padding: 20px 26px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 20px; align-items: center; }
+      .eyebrow { color: var(--accent); text-transform: uppercase; letter-spacing: 1.8px; font-size: 10px; font-weight: 700; margin-bottom: 7px; }
+      .masthead p { margin-bottom: 5px; font-size: 12px; }
+      #account { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; font-size: 12px; }
+      #account button { font-size: 11px; }
+      #login, #setup { max-width: 520px; margin: 32px auto; padding: 24px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+      #login-submit { margin-top: 14px; }
+      #app { display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: calc(100vh - 120px); }
+      .sidebar { border-right: 1px solid var(--line); padding: 22px 14px; background: #0e1821; min-width: 0; }
+      .sidebar h2 { padding: 0 9px; font-size: 13px; margin-bottom: 8px; }
+      .sidebar > p { padding: 0 9px; font-size: 11px; }
+      #branch-tree ul { list-style: none; margin: 0; padding-left: 13px; border-left: 1px solid var(--line); }
+      #branch-tree > ul { padding-left: 0; border: 0; }
+      .branch { width: 100%; text-align: left; display: flex; gap: 8px; align-items: center; padding: 9px 8px; margin: 3px 0; background: transparent; color: #dce7ee; border-color: transparent; min-width: 0; }
+      .branch.open { background: #172b36; }
+      .branch.active { border-color: var(--accent); }
+      .branch-copy { min-width: 0; }
+      .branch-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+      .branch-kind { font-size: 10px; color: var(--muted); }
+      .branch-dot { width: 7px; height: 7px; border-radius: 50%; background: #5e7889; flex: 0 0 auto; }
+      .branch-dot.running { background: var(--accent); box-shadow: 0 0 9px #8de1c544; }
+      .sidebar details { padding: 13px 9px; margin-top: 15px; border-top: 1px solid var(--line); font-size: 11px; }
+      summary { cursor: pointer; color: #bdced9; }
+      .workspace { min-width: 0; padding: 20px; }
+      .workspace-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
+      .workspace-heading h2 { font-size: 16px; margin-bottom: 4px; }
+      .workspace-heading p { font-size: 12px; margin: 0; }
+      #pane-count { border: 1px solid var(--line); border-radius: 20px; padding: 6px 11px; font-size: 11px; color: var(--accent); white-space: nowrap; }
+      #panes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; }
+      #panes[data-count="1"] { grid-template-columns: minmax(0, 1fr); max-width: 1060px; margin: auto; }
+      .pane { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+      .pane.active { border-color: #659e95; }
+      .pane-header { padding: 16px; border-bottom: 1px solid var(--line); }
+      .pane-heading { display: flex; justify-content: space-between; align-items: start; gap: 10px; }
+      .pane-heading h3 { font-size: 15px; margin-bottom: 4px; overflow-wrap: anywhere; }
+      .pane-heading .close { padding: 3px 8px; font-size: 18px; line-height: 1.2; }
+      .pane-kind { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent); }
+      .pane-status { font-size: 11px; margin-top: 9px; color: var(--muted); }
+      .transcript { height: 360px; overflow-y: auto; padding: 0 16px; scrollbar-color: #3a5060 transparent; }
+      .message { padding: 15px 0; border-bottom: 1px solid var(--line); }
+      .message small { font-size: 10px; display: block; margin-bottom: 8px; }
+      .message-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; }
+      .fork-actions { display: flex; gap: 6px; align-items: center; margin-top: 10px; }
+      .fork-actions button { font-size: 10px; padding: 5px 8px; }
+      .fork-actions select { width: auto; font-size: 10px; padding: 4px; }
+      .empty { padding: 45px 10px; text-align: center; font-size: 13px; }
+      .live { color: var(--accent); margin: 12px 0; }
+      .tools { color: #bdd2dd; }
+      .composer { padding: 14px 16px; border-top: 1px solid var(--line); }
+      .composer textarea { min-height: 74px; font-size: 12px; }
+      .composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
+      .composer-footer small { font-size: 10px; }
+      .pane-error, #error, #login-error, #fork-error { color: #ffaaa6; white-space: pre-wrap; overflow-wrap: anywhere; }
+      .pane-error:empty, #error:empty { display: none; }
+      .pane-error { font-size: 12px; margin: 10px 0 0; }
+      .resources { border-top: 1px solid var(--line); padding: 0 16px; }
+      .resources details { padding: 12px 0; }
+      .resources details + details { border-top: 1px solid var(--line); }
+      .resources summary { font-size: 12px; }
+      .notes-save { margin-top: 8px; font-size: 11px; }
+      .file-content { max-height: 240px; overflow: auto; padding: 12px; background: #0c161f; border-radius: 6px; }
+      .resource-hint { font-size: 11px; margin: 10px 0 0; }
+      dialog { width: min(700px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; padding: 24px; border: 1px solid #527668; border-radius: 14px; background: var(--surface); color: #e9f0f5; }
+      dialog::backdrop { background: #040b13cc; backdrop-filter: blur(5px); }
+      .dialog-heading, .dialog-actions { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+      .dialog-heading h2 { margin-bottom: 0; }
+      #fork-context { font-size: 12px; margin: 12px 0; }
+      #fork-count { width: auto; }
+      .fork-branch { border: 1px solid var(--line); border-radius: 9px; padding: 13px; margin-top: 12px; }
+      .fork-branch legend { color: var(--accent); font-size: 12px; padding: 0 5px; }
+      .dialog-actions { margin-top: 18px; justify-content: flex-end; }
+      #login-message { color: var(--accent); }
+      @media (min-width: 1400px) { #panes[data-count="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); } #panes[data-count="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+      @media (max-width: 1050px) { #app { grid-template-columns: 190px minmax(0, 1fr); } #panes { grid-template-columns: minmax(0, 1fr); } }
+      @media (max-width: 650px) { .masthead { padding: 16px; flex-direction: column; align-items: start; } #account { justify-content: flex-start; } #app { grid-template-columns: minmax(0, 1fr); } .sidebar { border-right: 0; border-bottom: 1px solid var(--line); } #branch-tree { max-height: 200px; overflow: auto; } .sidebar details { display: none; } .workspace { padding: 14px; } .transcript { height: 320px; } }
     </style>
   </head>
   <body>
-    <header>
-      <h1>Pi in a tab</h1>
-      <p>Your durable agent lives in this browser. The local server only serves files and forwards model calls.</p>
-      <div id="account" hidden>
-        <strong id="user-name"></strong>
-        <button id="logout">Log out</button>
-        <button id="erase">Erase device data</button>
-      </div>
-      <small id="status" role="status">Checking session…</small>
+    <header class="masthead">
+      <div><div class="eyebrow">Browser-native · Durable by design</div><h1>Pi in a tab</h1><p>One starting point. Different directions. Compare the work as it happens.</p><small id="status" role="status">Checking session…</small></div>
+      <div id="account" hidden><strong id="user-name"></strong><button id="logout" class="secondary">Log out</button><button id="erase" class="secondary">Erase device data</button></div>
     </header>
     <section id="login" hidden>
       <h2>Sign in</h2>
-      <form id="login-form">
-        <label for="username">Username</label>
-        <input id="username" name="username" autocomplete="username" required>
-        <label for="password">Password</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" required>
-        <button id="login-submit" type="submit">Sign in</button>
-      </form>
-      <p id="login-error" role="alert"></p>
-      <p id="login-message"></p>
-      <p>Each account owns separate browser-local history. Tabs signed into the same account share one agent.</p>
+      <form id="login-form"><label for="username">Username</label><input id="username" name="username" autocomplete="username" required><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button id="login-submit" type="submit">Sign in</button></form>
+      <p id="login-error" role="alert"></p><p id="login-message"></p><p>Each account owns separate browser-local history. Tabs signed into the same account share one agent workspace.</p>
     </section>
     <section id="setup" hidden>
-      <h2>Set up your model credentials</h2>
-      <p>No model credentials found. For OpenCode Go, add <code>OPENCODE_API_KEY</code> to your local <code>.env</code>. Other provider API keys work too.</p>
-      <p>For a subscription login, run <code>npm run login</code> in the repo. Already use Pi? Your <code>~/.pi/agent/auth.json</code> is picked up automatically.</p>
-      <p>Restart the server and reload this page after setup. Credentials never go to browser storage.</p>
+      <h2>Set up your model credentials</h2><p>No model credentials found. For OpenCode Go, add <code>OPENCODE_API_KEY</code> to your local <code>.env</code>. Other provider API keys work too.</p><p>For a subscription login, run <code>npm run login</code> in the repo. Already use Pi? Your <code>~/.pi/agent/auth.json</code> is picked up automatically.</p><p>Restart the server and reload this page after setup. Credentials never go to browser storage.</p>
     </section>
     <main id="app" hidden>
-      <section>
-        <h2>Conversation</h2>
-        <label for="model">Model</label>
-        <select id="model"></select>
-        <div id="transcript"></div>
-        <pre id="live"></pre>
-        <pre id="tools"></pre>
-        <textarea id="input" rows="4" placeholder="Ask your agent to inspect files, evaluate JavaScript, or update notes"></textarea>
-        <button id="send">Send</button>
-        <p id="error" role="alert"></p>
-      </section>
-      <section>
-        <h2>Durable notes</h2>
-        <textarea id="notes" rows="7"></textarea>
-        <button id="save">Save in browser</button>
-        <h2>Local ownership</h2>
-        <pre id="ownership"></pre>
-        <h2>Recovery on open</h2>
-        <pre id="recovered"></pre>
-        <p>Open another tab on this origin to attach to the same agent.</p>
-        <p>Reads replay safely. Writes and arbitrary JavaScript do not.</p>
-      </section>
+      <aside class="sidebar"><h2>Branch explorer</h2><p>Open any branch to compare. Up to four panes; a fifth replaces the active pane.</p><nav id="branch-tree" aria-label="Conversations and subagents"></nav><details><summary>Local ownership & recovery</summary><pre id="ownership"></pre><pre id="recovered"></pre><p>Tabs share one browser owner. Reads replay safely; writes and arbitrary JavaScript do not.</p></details></aside>
+      <div class="workspace"><div class="workspace-heading"><div><h2>Explore in parallel</h2><p>Fork any turn. Give each direction its own instruction and model.</p></div><span id="pane-count">1 / 4 panes</span></div><p id="error" role="alert"></p><div id="panes" data-count="1"></div></div>
     </main>
+    <dialog id="fork-dialog" aria-labelledby="fork-title">
+      <form id="fork-form"><div class="dialog-heading"><h2 id="fork-title">Explore new directions</h2><button id="fork-close" type="button" class="secondary" aria-label="Close fork dialog">×</button></div><p id="fork-context"></p><label for="fork-count">Number of branches</label><select id="fork-count"><option value="1">1 branch</option><option value="2">2 branches</option><option value="3">3 branches</option><option value="4">4 branches</option></select><div id="fork-branches"></div><p id="fork-error" role="alert"></p><div class="dialog-actions"><button id="fork-cancel" type="button" class="secondary">Cancel</button><button id="fork-submit" type="submit">Create branches</button></div></form>
+    </dialog>
     <script type="module" src="/client.js"></script>
   </body>
 </html>
