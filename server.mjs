@@ -9,9 +9,10 @@ await loadEnvironment();
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 4474);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be between 1 and 65535');
-const loopback = host === 'localhost' || host === '::1' || /^127(?:\.(?:\d{1,3})){3}$/.test(host);
+const isLoopback = name => name === 'localhost' || name === '::1' || name === '[::1]' || /^127(?:\.(?:\d{1,3})){3}$/.test(name);
+const loopback = isLoopback(host);
 if (!loopback && !process.env.PI_TAB_USERS) throw new Error('Non-loopback HOST requires PI_TAB_USERS');
-const { authenticate, sessionCookie, sessionUser, loginRequired } = await import('./auth.mjs');
+const { authenticate, revokeSession, sessionCookie, sessionUser, loginRequired } = await import('./auth.mjs');
 const models = builtinModels({ credentials });
 await models.refresh();
 const defaultOrigins = [`http://localhost:${port}`, `http://127.0.0.1:${port}`, `http://[::1]:${port}`];
@@ -20,6 +21,11 @@ for (const origin of allowedOrigins) {
   if (new URL(origin).origin !== origin) throw new Error('PI_ALLOWED_ORIGINS must contain exact origins');
 }
 const allowedHosts = new Set([...allowedOrigins].map(origin => new URL(origin).host));
+if (!process.env.PI_TAB_USERS && [...allowedOrigins].some(origin => !isLoopback(new URL(origin).hostname))) {
+  throw new Error('Non-loopback PI_ALLOWED_ORIGINS requires PI_TAB_USERS');
+}
+// Without app accounts, only direct local browsers are trusted; reverse proxies add these headers.
+const proxyHeaders = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip', 'tailscale-user-login', 'cf-connecting-ip'];
 await mkdir('dist', { recursive: true });
 await build({
   entryPoints: ['client.js', 'owner.js', 'eval-worker.js'], outdir: 'dist',
@@ -57,6 +63,9 @@ const server = createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   try {
     if (!allowedHosts.has(req.headers.host)) return json(res, 403, { error: 'Host not allowed' });
+    if (!loginRequired && proxyHeaders.some(name => req.headers[name] !== undefined)) {
+      return json(res, 403, { error: 'Proxied access requires PI_TAB_USERS' });
+    }
     const origin = req.headers.origin;
     if (origin && !allowedOrigins.has(origin)) return json(res, 403, { error: 'Origin not allowed' });
     if (req.method === 'POST' && !allowedOrigins.has(origin)) return json(res, 403, { error: 'Same-origin requests only' });
@@ -73,7 +82,10 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { user: authenticated });
     }
     if (req.method === 'POST' && url.pathname === '/api/logout') {
-      if (loginRequired) res.setHeader('Set-Cookie', sessionCookie(undefined, origin));
+      if (loginRequired) {
+        revokeSession(req);
+        res.setHeader('Set-Cookie', sessionCookie(undefined, origin));
+      }
       return json(res, 200, { user: null });
     }
     if (req.method === 'GET' && url.pathname === '/api/me') return json(res, 200, { user: user || null, loginRequired });
@@ -100,7 +112,7 @@ const server = createServer(async (req, res) => {
     const abort = new AbortController();
     res.on('close', () => abort.abort());
     res.setHeader('Content-Type', 'application/x-ndjson');
-    const stream = models.streamSimple(model, input.context, { reasoning: input.reasoning || 'minimal', signal: abort.signal });
+    const stream = models.streamSimple(model, input.context, { reasoning: input.reasoning || 'low', signal: abort.signal });
     for await (const event of stream) {
       if (res.destroyed) break;
       if (!res.write(JSON.stringify(event) + '\n')) await once(res, 'drain', { signal: abort.signal });

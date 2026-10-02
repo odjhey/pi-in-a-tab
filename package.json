@@ -2,6 +2,7 @@
   "name": "pi-in-a-tab",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "engines": { "node": ">=22.19.0" },
   "scripts": {

@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 
@@ -43,8 +43,10 @@ export async function authenticate(id, password) {
   return user && matches ? publicUser(user) : undefined;
 }
 
-export function sessionUser(request) {
-  if (!loginRequired) return { id: 'local', name: 'You' };
+// Logged-out session ids until their expiry. In memory only: a server restart forgets revocations.
+const revoked = new Map();
+
+function verifiedClaims(request) {
   const token = (request.headers.cookie || '').split(';').map(part => part.trim())
     .find(part => part.startsWith('pi_session='))?.slice('pi_session='.length);
   if (!token) return undefined;
@@ -56,17 +58,32 @@ export function sessionUser(request) {
   try {
     const claims = JSON.parse(Buffer.from(payload, 'base64url').toString());
     if (!Number.isSafeInteger(claims.exp) || claims.exp <= Date.now()) return undefined;
-    const user = users.find(user => user.id === claims.sub);
-    return user ? publicUser(user) : undefined;
+    if (typeof claims.jti !== 'string' || revoked.has(claims.jti)) return undefined;
+    return claims;
   } catch {
     return undefined;
   }
+}
+
+export function sessionUser(request) {
+  if (!loginRequired) return { id: 'local', name: 'You' };
+  const claims = verifiedClaims(request);
+  const user = claims && users.find(user => user.id === claims.sub);
+  return user ? publicUser(user) : undefined;
+}
+
+export function revokeSession(request) {
+  const claims = verifiedClaims(request);
+  if (!claims) return;
+  const now = Date.now();
+  for (const [id, exp] of revoked) if (exp <= now) revoked.delete(id);
+  revoked.set(claims.jti, claims.exp);
 }
 
 export function sessionCookie(user, origin) {
   const secure = origin.startsWith('https://') ? '; Secure' : '';
   const attributes = `Path=/; HttpOnly; SameSite=Strict${secure}`;
   if (!user) return `pi_session=; Max-Age=0; ${attributes}`;
-  const payload = Buffer.from(JSON.stringify({ sub: user.id, exp: Date.now() + lifetimeSeconds * 1000 })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({ sub: user.id, jti: randomUUID(), exp: Date.now() + lifetimeSeconds * 1000 })).toString('base64url');
   return `pi_session=${payload}.${sign(payload)}; Max-Age=${lifetimeSeconds}; ${attributes}`;
 }

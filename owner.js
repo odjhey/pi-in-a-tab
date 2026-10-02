@@ -96,7 +96,7 @@ const ready = navigator.locks.request(`pi-in-a-tab-owner:${userId}`, async () =>
     settings: { retry: { enabled: false }, stream: { timeoutMs: 120000 } },
     onReport: error => broadcast({ type: 'error', error: String(error) }) }, context);
   root = await harness.root(context, {
-    agent: { model: { provider: initial.provider, modelId: initial.id }, thinkingLevel: 'minimal' },
+    agent: { model: { provider: initial.provider, modelId: initial.id }, thinkingLevel: 'low' },
     init: async (tx, id) => { await tx.doc(Notes, id); }
   });
   state.recovered = await harness.inspect(context);
