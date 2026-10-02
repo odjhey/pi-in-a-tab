@@ -1,0 +1,18 @@
+{
+  "name": "pi-in-a-tab",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.19.0" },
+  "scripts": {
+    "start": "node server.mjs",
+    "login": "node login.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.0.0",
+    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-durable": "1.0.0",
+    "esbuild": "0.28.2",
+    "proper-lockfile": "4.1.2"
+  }
+}

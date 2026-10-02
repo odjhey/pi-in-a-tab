@@ -1,0 +1,7 @@
+node_modules/
+dist/
+bundles/
+.env
+.session-secret
+auth.json
+auth.json.lock/

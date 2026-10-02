@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Pi in a tab</title>
+    <style>
+      body { margin: 0; background: #101820; color: #edf3f5; font: 15px system-ui; }
+      [hidden] { display: none !important; }
+      #login, #setup { max-width: 520px; margin: 24px auto; }
+      #account { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      input, select, textarea { box-sizing: border-box; width: 100%; padding: 12px; margin: 8px 0; background: #0c151c; color: white; border: 1px solid #4a6878; border-radius: 7px; }
+      header, main { max-width: 1150px; margin: auto; padding: 22px; }
+      header { border-bottom: 1px solid #30424e; }
+      h1 { margin: 0 0 10px; font-size: 28px; }
+      p { color: #b3c6ce; }
+      main { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; }
+      section { background: #172630; border: 1px solid #30424e; border-radius: 12px; padding: 18px; }
+      button { background: #83dec7; color: #102a24; border: none; padding: 10px 14px; margin-top: 8px; border-radius: 6px; cursor: pointer; }
+      .message { border-bottom: 1px solid #30424e; padding: 14px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+      small { color: #85bdb7; display: block; margin-bottom: 6px; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+      #error, #login-error { color: #ffaba7; }
+      #live, #login-message { color: #83dec7; }
+      @media (max-width: 750px) { main { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Pi in a tab</h1>
+      <p>Your durable agent lives in this browser. The local server only serves files and forwards model calls.</p>
+      <div id="account" hidden>
+        <strong id="user-name"></strong>
+        <button id="logout">Log out</button>
+        <button id="erase">Erase device data</button>
+      </div>
+      <small id="status">Checking session…</small>
+    </header>
+    <section id="login" hidden>
+      <h2>Sign in</h2>
+      <form id="login-form">
+        <label for="username">Username</label>
+        <input id="username" name="username" autocomplete="username" required>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button id="login-submit" type="submit">Sign in</button>
+      </form>
+      <p id="login-error" role="alert"></p>
+      <p id="login-message"></p>
+      <p>Each account owns separate browser-local history. Tabs signed into the same account share one agent.</p>
+    </section>
+    <section id="setup" hidden>
+      <h2>Set up your model credentials</h2>
+      <p>No model credentials found. For OpenCode Go, add <code>OPENCODE_API_KEY</code> to your local <code>.env</code>. Other provider API keys work too.</p>
+      <p>For a subscription login, run <code>npm run login</code> in the repo. Already use Pi? Your <code>~/.pi/agent/auth.json</code> is picked up automatically.</p>
+      <p>Restart the server and reload this page after setup. Credentials never go to browser storage.</p>
+    </section>
+    <main id="app" hidden>
+      <section>
+        <h2>Conversation</h2>
+        <label for="model">Model</label>
+        <select id="model"></select>
+        <div id="transcript"></div>
+        <pre id="live"></pre>
+        <pre id="tools"></pre>
+        <textarea id="input" rows="4" placeholder="Ask your agent to inspect files, evaluate JavaScript, or update notes"></textarea>
+        <button id="send">Send</button>
+        <p id="error" role="alert"></p>
+      </section>
+      <section>
+        <h2>Durable notes</h2>
+        <textarea id="notes" rows="7"></textarea>
+        <button id="save">Save in browser</button>
+        <h2>Local ownership</h2>
+        <pre id="ownership"></pre>
+        <h2>Recovery on open</h2>
+        <pre id="recovered"></pre>
+        <p>Open another tab on this origin to attach to the same agent.</p>
+        <p>Reads replay safely. Writes and arbitrary JavaScript do not.</p>
+      </section>
+    </main>
+    <script type="module" src="/client.js"></script>
+  </body>
+</html>
