@@ -13,7 +13,7 @@ const loopback = host === 'localhost' || host === '::1' || /^127(?:\.(?:\d{1,3})
 if (!loopback && !process.env.PI_TAB_USERS) throw new Error('Non-loopback HOST requires PI_TAB_USERS');
 const { authenticate, sessionCookie, sessionUser, loginRequired } = await import('./auth.mjs');
 const models = builtinModels({ credentials });
-await models.refresh({ allowNetwork: false });
+await models.refresh();
 const defaultOrigins = [`http://localhost:${port}`, `http://127.0.0.1:${port}`, `http://[::1]:${port}`];
 const allowedOrigins = new Set([...defaultOrigins, ...(process.env.PI_ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean)]);
 for (const origin of allowedOrigins) {
