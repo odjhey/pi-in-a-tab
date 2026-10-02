@@ -15,13 +15,34 @@ async function confirmedUser() {
 }
 const ownerId = crypto.randomUUID();
 const ports = new Set();
-const state = { userId, ownerId, view: null, notes: null, openedAt: Date.now(), recovered: null };
+const state = { userId, ownerId, buildId: APP_BUILD_ID, view: null, notes: null, openedAt: Date.now(), recovered: null };
 const Notes = defineDoc({ kind: 'tab.notes', version: 1, scope: 'conversation',
   history: 'rewindable', fork: 'asOf', initial: () => ({ text: '' }) });
 const text = value => ({ content: [{ type: 'text', text: value }] });
 let root;
 let harness;
 let fs;
+let resolveInitialization;
+let rejectInitialization;
+const initialization = new Promise((resolve, reject) => {
+  resolveInitialization = resolve;
+  rejectInitialization = reject;
+});
+void initialization.catch(() => {});
+let ownsLock = false;
+const waiting = setTimeout(() => {
+  if (!ownsLock) {
+    state.waitingForOwner = true;
+    broadcast({ type: 'waiting' });
+  }
+}, 500);
+
+async function configure(change = {}) {
+  const agent = await root.agent(context);
+  if (agent.thinkingLevel === 'minimal') change.thinkingLevel = 'low';
+  if (change.model?.provider === agent.model?.provider && change.model?.modelId === agent.model?.modelId) delete change.model;
+  if (Object.keys(change).length) await root.configure(change, context);
+}
 
 function broadcast(frame) {
   for (const port of ports) port.postMessage(frame);
@@ -48,6 +69,9 @@ function evaluate(code, files, signal) {
 }
 
 const ready = navigator.locks.request(`pi-in-a-tab-owner:${userId}`, async () => {
+  ownsLock = true;
+  clearTimeout(waiting);
+  state.waitingForOwner = false;
   await confirmedUser();
   fs = await IndexedDBFileSystem.open(`pi-in-a-tab:${userId}`);
   await fs.createDir('/workspace', { recursive: true });
@@ -99,6 +123,7 @@ const ready = navigator.locks.request(`pi-in-a-tab-owner:${userId}`, async () =>
     agent: { model: { provider: initial.provider, modelId: initial.id }, thinkingLevel: 'low' },
     init: async (tx, id) => { await tx.doc(Notes, id); }
   });
+  await configure();
   state.recovered = await harness.inspect(context);
   for (const [channel, watch] of [['view', await root.watch(context)], ['notes', await harness.watchDoc(Notes, root.id, context)]]) {
     state[channel] = watch.value;
@@ -107,22 +132,18 @@ const ready = navigator.locks.request(`pi-in-a-tab-owner:${userId}`, async () =>
       broadcast({ type: 'state', state });
     });
   }
+  resolveInitialization();
   broadcast({ type: 'state', state });
   harness.resume();
   return new Promise(() => {}); // Own the lock for this worker's lifetime.
 });
 
-// Readiness ends at the first complete baseline, not when the lifetime lock returns.
-async function initialized() {
-  while (!state.view) {
-    await Promise.race([ready, new Promise(resolve => setTimeout(resolve, 20))]);
-  }
-}
-
 self.onconnect = event => {
   const port = event.ports[0];
   ports.add(port);
   port.start();
+  port.postMessage({ type: 'hello', buildId: APP_BUILD_ID });
+  if (state.waitingForOwner) port.postMessage({ type: 'waiting' });
   port.onmessage = async event => {
     const { id, action, payload } = event.data;
     try {
@@ -131,7 +152,7 @@ self.onconnect = event => {
         return;
       }
       if (action === 'detach') { ports.delete(port); port.close(); return; }
-      await initialized();
+      await initialization;
       await confirmedUser();
       if (action === 'erase') {
         await harness.close(context);
@@ -144,7 +165,7 @@ self.onconnect = event => {
       let result;
       if (action === 'attach') result = state;
       else if (action === 'model') {
-        await root.configure({ model: { provider: payload.provider, modelId: payload.modelId } }, context);
+        await configure({ model: { provider: payload.provider, modelId: payload.modelId } });
         result = { saved: true };
       } else if (action === 'submit') {
         const submission = await root.submit({ type: 'input', content: payload.content,
@@ -159,4 +180,7 @@ self.onconnect = event => {
     } catch (error) { port.postMessage({ type: 'reply', id, error: error.message }); }
   };
 };
-ready.catch(error => broadcast({ type: 'error', error: error.stack }));
+ready.catch(error => {
+  rejectInitialization(error);
+  broadcast({ type: 'error', error: error.message });
+});

@@ -26,6 +26,8 @@ Credentials are discovered in this order:
 
 Restart the server and reload after changing configuration. `/api/models` lists only credentialed providers' chat models; a configured credential is not a guarantee that your account can access every model. Pi-ai refreshes dynamic provider catalogs at startup when credentials are available. Use the model picker; its selection is remembered separately for each app user in browser storage. Set `PI_MODEL=provider/modelId` for the initial default (for example `openai-codex/gpt-6.1-sol`); unavailable defaults fall back to an available model. Browser choices take precedence.
 
+After an app update, an older open tab can still own the browser-local agent. If you see “This app was updated” or “Waiting for an older tab to close”, close the other tabs for this site and reload. Your conversation is kept; old `minimal` thinking settings are upgraded to `low` when reopened. Provider failures appear as model errors in the transcript.
+
 ## Share over Tailscale
 
 Default binding is `127.0.0.1`, with one local user and no app login. Before exposing it through a reverse proxy, enable app accounts. These accounts isolate browser state, **not provider billing or credentials**: all accounts use the server owner's configured models. Each friend should normally run their own copy with their own model login.

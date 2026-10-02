@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
-import { readFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
+import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 import { credentials, loadEnvironment } from './credentials.mjs';
@@ -27,12 +28,31 @@ if (!process.env.PI_TAB_USERS && [...allowedOrigins].some(origin => !isLoopback(
 // Without app accounts, only direct local browsers are trusted; reverse proxies add these headers.
 const proxyHeaders = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip', 'tailscale-user-login', 'cf-connecting-ip'];
 await mkdir('dist', { recursive: true });
-await build({
-  entryPoints: ['client.js', 'owner.js', 'eval-worker.js'], outdir: 'dist',
+const bundles = await build({
+  entryPoints: ['client.js', 'owner.js', 'eval-worker.js'], outdir: 'dist', write: false,
   bundle: true, platform: 'browser', format: 'esm', minify: true
 });
-const assets = new Map([['/', await readFile('index.html')]]);
-for (const entry of ['client.js', 'owner.js', 'eval-worker.js']) assets.set('/' + entry, await readFile('dist/' + entry));
+const index = await readFile('index.html');
+const hash = createHash('sha256').update(index).update(await readFile('server.mjs'));
+for (const file of bundles.outputFiles) hash.update(file.contents);
+const buildId = hash.digest('hex');
+const assets = new Map([['/', index]]);
+for (const file of bundles.outputFiles) {
+  const bytes = Buffer.concat([Buffer.from('const APP_BUILD_ID = ' + JSON.stringify(buildId) + ';\n'), file.contents]);
+  await writeFile(file.path, bytes);
+  assets.set('/' + file.path.split('/').pop(), bytes);
+}
+const environmentSecrets = Object.entries(process.env)
+  .filter(([name, value]) => /(?:key|token|secret|password)/i.test(name) && value)
+  .map(([, value]) => value);
+async function modelError(value, model) {
+  let message = String(value);
+  const auth = await models.getAuth(model);
+  for (const secret of [...environmentSecrets, auth?.auth?.apiKey]) {
+    if (secret) message = message.replaceAll(secret, '[redacted]');
+  }
+  return message.replace(/(Bearer\s+)[^\s"']+/gi, '$1[redacted]');
+}
 const limits = new Map();
 function json(res, status, value) {
   res.statusCode = status;
@@ -88,7 +108,7 @@ const server = createServer(async (req, res) => {
       }
       return json(res, 200, { user: null });
     }
-    if (req.method === 'GET' && url.pathname === '/api/me') return json(res, 200, { user: user || null, loginRequired });
+    if (req.method === 'GET' && url.pathname === '/api/me') return json(res, 200, { user: user || null, loginRequired, buildId });
     if ((req.method === 'GET' || req.method === 'HEAD') && assets.has(url.pathname)) {
       if (url.pathname === '/owner.js' && (!user || url.searchParams.get('user') !== user.id)) {
         return json(res, 401, { error: 'Sign in before opening a browser owner' });
@@ -115,6 +135,9 @@ const server = createServer(async (req, res) => {
     const stream = models.streamSimple(model, input.context, { reasoning: input.reasoning || 'low', signal: abort.signal });
     for await (const event of stream) {
       if (res.destroyed) break;
+      if (event.type === 'error' && event.error?.errorMessage) {
+        event.error.errorMessage = await modelError(event.error.errorMessage, model);
+      }
       if (!res.write(JSON.stringify(event) + '\n')) await once(res, 'drain', { signal: abort.signal });
     }
     res.end();

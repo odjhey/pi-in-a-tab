@@ -7,6 +7,33 @@ let user;
 let worker;
 let loginRequired;
 let catalog = [];
+const updateMessage = 'This app was updated. Close other tabs for this site, then reload.';
+let ownerReady = false;
+let updateRequired = false;
+
+function controls(enabled) {
+  for (const id of ['model', 'input', 'send', 'notes', 'save', 'erase']) $(id).disabled = !enabled;
+}
+
+function updated() {
+  updateRequired = true;
+  detach();
+  controls(false);
+  $('status').textContent = updateMessage;
+  showError(updateMessage);
+}
+
+const safeError = value => String(value)
+  .replace(/(Bearer\s+)[^\s"']+/gi, '$1[redacted]')
+  .replace(/((?:api[-_]?key|access[-_]?token|refresh[-_]?token|password|secret)["']?\s*[:=]\s*["']?)[^\s"',}&]+/gi, '$1[redacted]')
+  .replace(/sk-[a-zA-Z0-9_-]+/g, '[redacted]');
+
+function messageText(message) {
+  const text = typeof message.content === 'string' ? message.content : content(message.content);
+  return message.role === 'assistant' && message.stopReason === 'error'
+    ? [text, 'Model error: ' + safeError(message.errorMessage || 'The provider returned an error.')].filter(Boolean).join('\n')
+    : text;
+}
 
 async function api(path, body) {
   const response = await fetch('/api/' + path, body === undefined ? {} : {
@@ -18,6 +45,7 @@ async function api(path, body) {
 }
 
 function detach() {
+  ownerReady = false;
   if (worker) {
     worker.port.postMessage({ action: 'detach' });
     worker.port.close();
@@ -44,7 +72,9 @@ function showLogin() {
 }
 
 function call(action, payload = {}) {
+  if (updateRequired) return Promise.reject(new Error(updateMessage));
   if (!worker) return Promise.reject(new Error('Sign in first'));
+  if (!ownerReady && action !== 'attach') return Promise.reject(new Error('Waiting for browser owner'));
   return new Promise((resolve, reject) => {
     const id = crypto.randomUUID();
     pending.set(id, { resolve, reject });
@@ -57,11 +87,14 @@ const content = blocks => (blocks || []).map(block => block.type === 'text' ? bl
   : block.type === 'toolCall' ? `→ ${block.name} ${JSON.stringify(block.arguments)}` : '').join('\n');
 
 function render(value) {
+  if (value.buildId !== APP_BUILD_ID) { updated(); return; }
   state = value;
   $('status').textContent = `${user.name} · attached to browser owner ${state.ownerId}`;
   $('ownership').textContent = JSON.stringify({ userId: state.userId, ownerId: state.ownerId,
     openedAt: state.openedAt, storage: 'IndexedDB / JSONL', serverStorage: 'none' }, null, 2);
   $('recovered').textContent = JSON.stringify(state.recovered, null, 2);
+  ownerReady = true;
+  $('error').textContent = '';
   $('transcript').replaceChildren();
   for (const entry of state.view?.entries || []) {
     if (entry.kind === 'pi.system') continue;
@@ -70,8 +103,7 @@ function render(value) {
     row.dataset.entryId = entry.id;
     const label = document.createElement('small');
     label.textContent = `${entry.kind} · #${entry.id}`;
-    row.append(label, document.createTextNode((entry.model || []).map(message =>
-      typeof message.content === 'string' ? message.content : content(message.content)).join('\n')));
+    row.append(label, document.createTextNode((entry.model || []).map(messageText).join('\n')));
     $('transcript').append(row);
   }
   const live = state.view?.docs['pi.live'] || {};
@@ -97,6 +129,12 @@ function evaluate(frame, owner) {
 
 async function attach(confirmedUser) {
   detach();
+  updateRequired = false;
+  controls(false);
+  $('status').textContent = 'Connecting to browser owner…';
+  const identity = await api('me');
+  if (identity.buildId !== APP_BUILD_ID) { updated(); return; }
+  if (identity.user?.id !== confirmedUser.id) throw new Error('Session changed; sign in again');
   user = confirmedUser;
   $('login').hidden = true;
   $('app').hidden = false;
@@ -117,19 +155,30 @@ async function attach(confirmedUser) {
   if (!catalog.length) {
     $('app').hidden = true;
     $('setup').hidden = false;
+    $('erase').disabled = false;
     $('status').textContent = 'Configure your model credentials, then restart the server and reload';
     return;
   }
   const preference = localStorage.getItem('pi-in-a-tab:model:' + user.id) || available.defaultModel;
   if (catalog.some(model => model.provider + '/' + model.id === preference)) $('model').value = preference;
-  const owner = new SharedWorker('/owner.js?user=' + encodeURIComponent(user.id), {
-    type: 'module', name: 'pi-in-a-tab:' + user.id
+  const owner = new SharedWorker('/owner.js?user=' + encodeURIComponent(user.id) + '&build=' + APP_BUILD_ID, {
+    type: 'module', name: 'pi-in-a-tab:' + user.id + ':' + APP_BUILD_ID
   });
   worker = owner;
   owner.port.start();
   owner.port.onmessage = event => {
     if (worker !== owner) return;
     const frame = event.data;
+    if (frame.type === 'hello') {
+      if (frame.buildId !== APP_BUILD_ID) updated();
+      return;
+    }
+    if (frame.type === 'waiting') {
+      $('status').textContent = 'Waiting for an older tab to close. ' + updateMessage;
+      showError(updateMessage);
+      return;
+    }
+    if (frame.error?.startsWith('Unknown action:')) { updated(); return; }
     if (frame.type === 'evaluate') return evaluate(frame, owner);
     if (frame.type === 'reply') {
       const request = pending.get(frame.id);
@@ -142,7 +191,9 @@ async function attach(confirmedUser) {
   };
   owner.onerror = event => showError(event.message);
   render(await call('attach'));
+  if (!ownerReady) return;
   await selectModel();
+  controls(true);
 }
 
 async function refreshIdentity() {
@@ -154,7 +205,7 @@ async function refreshIdentity() {
 }
 
 function showError(error) {
-  (user && !$('setup').hidden ? $('status') : user ? $('error') : $('login-error')).textContent = error;
+  (user && !$('setup').hidden ? $('status') : user ? $('error') : $('login-error')).textContent = updateRequired ? updateMessage : safeError(error);
 }
 async function guard(operation) {
   try { return await operation(); } catch (error) { showError(error.message); }
