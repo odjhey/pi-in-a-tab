@@ -35,6 +35,7 @@ function showLogin() {
   user = undefined;
   $('app').hidden = true;
   $('login').hidden = false;
+  $('setup').hidden = true;
   $('account').hidden = true;
   $('status').textContent = 'Sign in to your browser-local agent';
   $('transcript').replaceChildren();
@@ -153,7 +154,7 @@ async function refreshIdentity() {
 }
 
 function showError(error) {
-  (user ? $('error') : $('login-error')).textContent = error;
+  (user && !$('setup').hidden ? $('status') : user ? $('error') : $('login-error')).textContent = error;
 }
 async function guard(operation) {
   try { return await operation(); } catch (error) { showError(error.message); }
@@ -161,7 +162,7 @@ async function guard(operation) {
 
 async function logout(erase) {
   const leavingUser = user;
-  if (erase) await call('erase');
+  if (erase && worker) await call('erase');
   await api('logout', {});
   showLogin();
   authChanges.postMessage({ changed: true });
