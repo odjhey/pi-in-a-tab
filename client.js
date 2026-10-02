@@ -1,3 +1,5 @@
+import { createStage } from './stage-client.js';
+
 const $ = id => document.getElementById(id);
 const pending = new Map();
 const evaluators = new Set();
@@ -17,6 +19,8 @@ let openIds = [];
 let activeId;
 let forkTarget;
 let forking = false;
+let changingGodMode = false;
+let pageExecution = Promise.resolve();
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -35,6 +39,7 @@ function button(text, operation, className = 'secondary') {
 function controls(value) {
   enabled = value;
   $('erase').disabled = !value;
+  $('god-mode').disabled = !value || changingGodMode;
   for (const pane of panes.values()) updateControls(pane);
   for (const node of $('fork-form').elements) node.disabled = !value || forking;
 }
@@ -48,6 +53,11 @@ function updateControls(pane) {
   pane.notes.disabled = !enabled;
   pane.save.disabled = !enabled || pane.savingNotes;
   for (const node of pane.transcript.querySelectorAll('button, select')) node.disabled = !enabled;
+  for (const card of pane.cards.values()) {
+    const disabled = !enabled || card.status !== 'pending' || card.answering;
+    card.approve.disabled = card.reject.disabled = card.reason.disabled = disabled;
+  }
+  pane.stageReset.disabled = !enabled;
 }
 
 function updated() {
@@ -84,6 +94,7 @@ async function api(path, body) {
 
 function detach() {
   ownerReady = false;
+  for (const pane of panes.values()) { pane.stage?.dispose(); pane.stage = undefined; }
   if (worker) {
     worker.port.postMessage({ action: 'detach' });
     worker.port.close();
@@ -205,8 +216,237 @@ async function paneOperation(pane, operation) {
   catch (error) { pane.error.textContent = updateRequired ? updateMessage : safeError(error.message); }
 }
 
+function ensureStage(pane) {
+  if (!pane.stage) pane.stage = createStage(pane.stageContainer);
+  return pane.stage;
+}
+
+function renderInteractions(pane, conversation) {
+  const cards = conversation.interactions?.cards || {};
+  for (const [id, card] of pane.cards) {
+    if (!Object.hasOwn(cards, id)) { card.root.remove(); pane.cards.delete(id); }
+  }
+  for (const [id, value] of Object.entries(cards)) {
+    let card = pane.cards.get(id);
+    if (!card) {
+      card = { root: element('article', 'approval-card'), answering: false };
+      card.root.dataset.cardId = id;
+      card.heading = element('h4');
+      card.text = element('p', 'approval-text');
+      card.code = element('pre', 'approval-code');
+      card.why = element('p', 'approval-why');
+      card.state = element('small', 'approval-status');
+      card.reason = element('textarea');
+      card.reason.rows = 2;
+      card.reason.placeholder = 'Optional reason or answer';
+      card.reason.setAttribute('aria-label', 'Optional reason or answer');
+      card.error = element('p', 'pane-error');
+      card.error.setAttribute('role', 'alert');
+      const answer = async approved => {
+        if (card.answering || card.status !== 'pending') return;
+        card.answering = true;
+        card.error.textContent = '';
+        updateControls(pane);
+        try {
+          await call('answer', { conversationId: pane.id, cardId: id, approved, reason: card.reason.value });
+        } catch (error) { card.error.textContent = safeError(error.message); }
+        finally { card.answering = false; updateControls(pane); }
+      };
+      card.approve = button('Approve', () => void answer(true));
+      card.reject = button('Reject', () => void answer(false), 'secondary');
+      const actions = element('div', 'approval-actions');
+      actions.append(card.approve, card.reject);
+      card.root.append(card.heading, card.text, card.why, card.code, card.state, card.reason, actions, card.error);
+      pane.cards.set(id, card);
+      pane.interactions.append(card.root);
+    }
+    card.status = value.status;
+    card.root.dataset.status = value.status;
+    card.heading.textContent = value.kind === 'page_js' ? 'Approve main-page JavaScript' : 'Your answer is needed';
+    card.text.textContent = value.text || '';
+    card.text.hidden = !value.text;
+    card.code.textContent = value.code || '';
+    card.code.hidden = value.kind !== 'page_js';
+    card.why.textContent = value.reason || '';
+    card.why.hidden = !value.reason;
+    card.state.textContent = value.status + (value.answerReason ? ' · ' + value.answerReason : '');
+    card.reason.hidden = card.approve.hidden = card.reject.hidden = value.status !== 'pending';
+  }
+}
+
+function chartFigure(chart) {
+  const figure = element('figure', 'chart');
+  figure.append(element('figcaption', '', chart.title));
+  const svgNode = (tag, attributes, text) => {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value));
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const height = chart.values.length * 40 + 20;
+  const svg = svgNode('svg', { viewBox: '0 0 640 ' + height, role: 'img', 'aria-label': chart.title });
+  svg.append(svgNode('title', {}, chart.title));
+  const min = Math.min(0, ...chart.values);
+  const max = Math.max(0, ...chart.values);
+  const x = value => 170 + (value - min) / (max - min || 1) * 370;
+  const zero = x(0);
+  svg.append(svgNode('line', { x1: zero, x2: zero, y1: 5, y2: height - 5, stroke: 'var(--muted)' }));
+  chart.values.forEach((value, index) => {
+    const y = index * 40 + 10;
+    svg.append(svgNode('text', { x: 160, y: y + 19, 'text-anchor': 'end', fill: 'var(--text)' }, chart.labels[index]),
+      svgNode('rect', { x: Math.min(zero, x(value)), y, width: Math.abs(x(value) - zero), height: 27, rx: 3, fill: 'var(--accent)' }),
+      svgNode('text', { x: 550, y: y + 19, fill: 'var(--text)' }, value));
+  });
+  figure.append(svg);
+  return figure;
+}
+
+function renderCharts(pane, conversation) {
+  const durable = conversation.interactions?.charts || {};
+  for (const id of Object.keys(durable)) pane.optimisticCharts.delete(id);
+  const charts = { ...Object.fromEntries(pane.optimisticCharts), ...durable };
+  for (const [id, chart] of pane.charts) {
+    if (!Object.hasOwn(charts, id)) { chart.root.remove(); pane.charts.delete(id); }
+  }
+  for (const [id, value] of Object.entries(charts)) {
+    const signature = JSON.stringify(value);
+    const existing = pane.charts.get(id);
+    if (existing?.signature === signature) continue;
+    const root = chartFigure(value);
+    root.dataset.chartId = id;
+    if (existing) existing.root.replaceWith(root);
+    else pane.chartPanel.append(root);
+    pane.charts.set(id, { root, signature });
+  }
+}
+
+function actionPane(frame) {
+  const id = frame.conversationId || activeId || state?.rootId;
+  if (!state?.conversations[id]) throw new Error('Conversation not found');
+  if (!panes.has(id)) openConversation(id);
+  return panes.get(id);
+}
+
+function serializable(value) {
+  const seen = new WeakSet();
+  return JSON.parse(JSON.stringify(value, (_key, item) => {
+    if (typeof item === 'bigint') return String(item);
+    if (typeof item === 'function' || typeof item === 'symbol') return String(item);
+    if (item instanceof Error) return { name: item.name, message: item.message };
+    if (item && typeof item === 'object') {
+      if (seen.has(item)) return '[Circular]';
+      seen.add(item);
+    }
+    return item;
+  }) ?? 'null');
+}
+
+async function runPageJS(code) {
+  if (state?.godMode !== true) throw new Error('God mode is disabled. Main-page JavaScript requires enabling it.');
+  const logs = [];
+  const errors = [];
+  const original = new Map();
+  const captureError = event => errors.push(safeError(event.message || event.reason?.message || event.reason || 'Page error'));
+  const printable = value => { try { return typeof value === 'string' ? value : JSON.stringify(serializable(value)); } catch { return String(value); } };
+  for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
+    const method = console[level];
+    original.set(level, method);
+    console[level] = (...values) => {
+      logs.push({ level, text: safeError(values.map(printable).join(' ')) });
+      method.apply(console, values);
+    };
+  }
+  window.addEventListener('error', captureError);
+  window.addEventListener('unhandledrejection', captureError);
+  try {
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    const result = serializable(await new AsyncFunction(code).call(window));
+    return { result, console: logs, errors };
+  } catch (error) {
+    errors.push(safeError(error.message || error));
+    const failure = new Error(safeError(error.message || error));
+    failure.result = { result: null, console: logs, errors };
+    throw failure;
+  } finally {
+    for (const [level, method] of original) console[level] = method;
+    window.removeEventListener('error', captureError);
+    window.removeEventListener('unhandledrejection', captureError);
+  }
+}
+
+const frontendActions = {
+  open_pane(args, frame) {
+    const id = args.conversation || frame.conversationId;
+    if (!state?.conversations[id]) throw new Error('Conversation not found');
+    openConversation(id);
+    return { conversation: id, opened: true };
+  },
+  highlight(args, frame) {
+    const entryId = String(args.entry);
+    let pane = [...panes.values()].find(value => [...value.transcript.querySelectorAll('[data-entry-id]')].some(row => row.dataset.entryId === entryId));
+    if (!pane) pane = actionPane(frame);
+    const row = [...pane.transcript.querySelectorAll('[data-entry-id]')].find(value => value.dataset.entryId === entryId);
+    if (!row) throw new Error('Message entry not found in conversation');
+    activatePane(pane.id);
+    pane.highlightedEntry = entryId;
+    for (const message of pane.transcript.querySelectorAll('.highlighted')) message.classList.remove('highlighted');
+    row.classList.add('highlighted');
+    row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    return { conversation: pane.id, entry: args.entry, highlighted: true };
+  },
+  toast(args) {
+    const toast = element('div', 'toast', args.text);
+    $('toasts').append(toast);
+    setTimeout(() => toast.remove(), 6000);
+    return { shown: true };
+  },
+  set_theme(args) {
+    if (args.mode !== undefined && !['dark', 'light'].includes(args.mode)) throw new Error('Theme mode must be dark or light');
+    if (args.accent !== undefined && !CSS.supports('color', args.accent)) throw new Error('Accent must be a CSS color');
+    if (args.mode) document.documentElement.dataset.theme = args.mode;
+    if (args.accent) document.documentElement.style.setProperty('--accent', args.accent);
+    return { mode: document.documentElement.dataset.theme || 'dark', accent: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() };
+  },
+  show_chart(args, frame) {
+    if (!Array.isArray(args.labels) || !Array.isArray(args.values) || args.labels.length !== args.values.length || !args.values.every(value => typeof value === 'number' && Number.isFinite(value))) {
+      throw new Error('Chart labels and finite numeric values must have matching lengths');
+    }
+    const pane = actionPane(frame);
+    const id = frame.actionId || frame.id;
+    pane.optimisticCharts.set(id, { ...args, id });
+    renderCharts(pane, state.conversations[pane.id]);
+    return { id, shown: true, conversation: pane.id };
+  },
+  page_js(args) {
+    const result = pageExecution.then(() => runPageJS(args.code));
+    pageExecution = result.catch(() => {});
+    return result;
+  },
+  async stage_run(args, frame) {
+    const pane = actionPane(frame);
+    pane.stagePanel.open = true;
+    return await ensureStage(pane).run(args.code);
+  },
+  async stage_reset(_args, frame) {
+    const pane = actionPane(frame);
+    pane.stagePanel.open = true;
+    return await ensureStage(pane).reset();
+  }
+};
+
+async function dispatchFrontend(frame, owner) {
+  let payload;
+  try {
+    if (!Object.hasOwn(frontendActions, frame.action)) throw new Error('Unknown frontend action: ' + frame.action);
+    payload = { result: serializable(await frontendActions[frame.action](frame.args || {}, frame)) };
+  } catch (error) { payload = { result: error.result || null, error: safeError(error.message || error) }; }
+  if (worker === owner) owner.port.postMessage({ action: 'tab-result', id: frame.id, payload });
+}
+
+
 function createPane(id) {
-  const pane = { id, submitting: false, changingModel: false, savingNotes: false, notesDirty: false };
+  const pane = { id, submitting: false, changingModel: false, savingNotes: false, notesDirty: false,
+    cards: new Map(), charts: new Map(), optimisticCharts: new Map() };
   pane.root = element('section', 'pane');
   pane.root.dataset.conversationId = id;
   pane.root.onpointerdown = () => activatePane(id);
@@ -240,6 +480,10 @@ function createPane(id) {
   header.append(heading, modelLabel, pane.model, pane.status);
   pane.transcript = element('div', 'transcript');
   pane.transcript.setAttribute('aria-label', 'Conversation transcript');
+  pane.interactions = element('section', 'interactions');
+  pane.interactions.setAttribute('aria-label', 'Approval requests');
+  pane.chartPanel = element('section', 'charts');
+  pane.chartPanel.setAttribute('aria-label', 'Conversation charts');
   const composer = element('div', 'composer');
   pane.input = element('textarea');
   pane.input.rows = 3;
@@ -291,8 +535,17 @@ function createPane(id) {
   pane.files.onchange = () => renderFile(pane);
   files.append(pane.fileSummary, pane.files, pane.fileContent,
     element('p', 'resource-hint', 'Read-only here. Ask the agent to create or edit a file.'));
-  resources.append(notes, files);
-  pane.root.append(header, pane.transcript, composer, resources);
+  pane.stagePanel = element('details', 'stage-panel');
+  pane.stagePanel.append(element('summary', '', 'Sandbox stage'));
+  pane.stageContainer = element('div', 'stage-container');
+  pane.stageReset = button('Reset stage', () => paneOperation(pane, async () => {
+    await ensureStage(pane).reset();
+  }), 'secondary');
+  pane.stagePanel.append(element('p', 'resource-hint', 'Scripts run in an isolated iframe, without access to this page or browser storage.'),
+    pane.stageContainer, pane.stageReset);
+  pane.stagePanel.ontoggle = () => { if (pane.stagePanel.open) ensureStage(pane); };
+  resources.append(notes, files, pane.stagePanel);
+  pane.root.append(header, pane.transcript, pane.interactions, pane.chartPanel, composer, resources);
   panes.set(id, pane);
   return pane;
 }
@@ -317,6 +570,7 @@ function renderPane(pane, conversation) {
   for (const entry of entries) {
     const row = element('div', 'message');
     row.dataset.entryId = entry.id;
+    row.classList.toggle('highlighted', pane.highlightedEntry === String(entry.id));
     row.append(element('small', '', `${entry.kind} · #${entry.id}`),
       element('div', 'message-body', (entry.model || []).map(messageText).join('\n')));
     const actions = element('div', 'fork-actions');
@@ -351,6 +605,8 @@ function renderPane(pane, conversation) {
   pane.files.hidden = !paths.length;
   pane.fileSummary.textContent = 'Branch files · ' + paths.length;
   renderFile(pane);
+  renderInteractions(pane, conversation);
+  renderCharts(pane, conversation);
   updateControls(pane);
 }
 
@@ -387,7 +643,7 @@ function renderTree() {
 
 function renderWorkspace() {
   for (const [id, pane] of panes) {
-    if (!openIds.includes(id)) { pane.root.remove(); panes.delete(id); }
+    if (!openIds.includes(id)) { pane.stage?.dispose(); pane.root.remove(); panes.delete(id); }
   }
   let next = $('panes').firstElementChild;
   for (const id of openIds) {
@@ -407,6 +663,7 @@ function render(value) {
   if (value.buildId !== APP_BUILD_ID) { updated(); return; }
   const initial = !state;
   state = value;
+  $('god-mode').checked = state.godMode === true;
   ownerReady = true;
   if (initial) restorePanes();
   openIds = openIds.filter(id => state.conversations[id]);
@@ -520,6 +777,7 @@ async function attach(confirmedUser) {
     }
     if (frame.error?.startsWith('Unknown action:')) { updated(); return; }
     if (frame.type === 'evaluate') return evaluate(frame, owner);
+    if (frame.type === 'frontend') return void dispatchFrontend(frame, owner);
     if (frame.type === 'reply') {
       const request = pending.get(frame.id);
       pending.delete(frame.id);
@@ -532,6 +790,7 @@ async function attach(confirmedUser) {
   owner.onerror = event => showError(event.message);
   render(await call('attach'));
   if (!ownerReady) return;
+  if (document.hasFocus()) await call('focus');
   // Existing branch model choices belong to the durable agent, not this tab.
   if (!state.conversations[state.rootId].agent?.model) {
     const model = catalog.find(item => item.provider + '/' + item.id === defaultModel);
@@ -610,4 +869,18 @@ $('logout').onclick = () => guard(() => logout(false));
 $('erase').onclick = () => guard(() => logout(true));
 authChanges.onmessage = () => { showLogin(); void guard(refreshIdentity); };
 window.addEventListener('pagehide', detach);
+window.addEventListener('focus', () => { if (ownerReady) void guard(() => call('focus')); });
+$('god-mode').onchange = () => {
+  const requested = $('god-mode').checked;
+  void guard(async () => {
+    changingGodMode = true;
+    controls(enabled);
+    try { await call('god-mode', { enabled: requested }); }
+    finally {
+      changingGodMode = false;
+      $('god-mode').checked = state?.godMode === true;
+      controls(enabled);
+    }
+  });
+};
 void guard(refreshIdentity);

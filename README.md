@@ -2,7 +2,7 @@
 
 A small, local-first way to run Pi Durable in a browser without installing the Pi coding agent. The whole agent harness runs in a SharedWorker, with conversation history, notes, and virtual files persisted in IndexedDB. A tiny Node server serves the app and forwards model calls using **your own** model credentials; it never saves your conversations. Reload or open another tab and pick up where you left off.
 
-**Experimental demo — not safe for production or untrusted users.** This is a just-for-fun exploration of what Pi Durable unlocks, not a hardened agent service. Only use it with people you trust and credentials you are comfortable spending.
+**Experimental demo — not safe for production or untrusted users.** This is a just-for-fun exploration of what Pi Durable unlocks, not a hardened agent service. Only use it with people you trust and credentials you are comfortable spending. **God mode (`page_js`) is especially dangerous:** after approval it runs code with the main app's privileges. Prompt injection can manipulate the UI, read or erase browser-origin data, and make authenticated model-proxy calls on your budget. Code approval is not a security sandbox.
 
 ## Branch workspace
 
@@ -10,6 +10,10 @@ A small, local-first way to run Pi Durable in a browser without installing the P
 - Fork any transcript entry once or into two to four branches. Give each branch an optional instruction and model; instructed branches start in parallel. Forks of forks work.
 - Files and notes are rewindable conversation documents: forks inherit them **as of the selected entry**, then change independently. Files are capped at 32 KiB UTF-8 each and the serialized workspace at 128 KiB; notes at 32 KiB. Existing small `/workspace` files are imported into the root once, best effort. The IndexedDB filesystem now only backs the durable JSONL log.
 - `delegate` runs one to three child conversations in parallel and returns their answers to the parent's tool call. `delegate_background` lets the parent answer immediately and delivers a durable follow-up when each child finishes. Both appear under their parent in the tree. Runaway protection: two subagent levels, twelve children per parent, three per call.
+- A focused-tab handler registry lets agents open panes, highlight turns, show toasts, change theme, and render durable inline SVG charts. Pure UI rendering is replay-safe. The most recently focused attached tab executes actions; no attached tab produces a clear tool error.
+- `ask_user` blocks on an Approve/Reject card with an optional reason. Cards and answers are conversation documents keyed by durable tool task IDs, so reloading reacquires the same pending decision rather than losing an in-memory promise.
+- `stage_run` builds and drives interactive DOM widgets inside a `sandbox="allow-scripts"` opaque-origin iframe. It returns the value, console messages, and runtime errors. The stage has its own CSP: `unsafe-eval` is allowed there, but network, nested workers, frames, and forms are blocked. `stage_reset` replaces the iframe.
+- `page_js(code, reason)` is refused unless the visible **God mode** toggle is on (off initially). Every call then requires a separate approval card showing the code and reason. Reject is reported back to the model. Pending approvals can resume; page JS already dispatched before a crash is not automatically run again.
 
 ### Five-minute demo
 
@@ -18,6 +22,10 @@ A small, local-first way to run Pi Durable in a browser without installing the P
 3. On that final reply, choose **Fork ×N**, select two branches, and give each an instruction to read then change `comparison.txt` differently. Pick Azure for one and Codex for the other if both are configured. Watch them beside the root; expand each pane's files to compare. Reload: the branches, files, and notes remain.
 4. Ask the parent: “Use delegate with three tasks in one call: a product pitch, a skeptic's objection, and a technical explanation of browser-local agents. Compose their answers.” Open the three children from the tree while they stream.
 5. Ask: “Use delegate_background for a detailed comparison of browser-local versus server-side agents; immediately say you'll report back.” The parent replies first; the child's answer arrives later as a follow-up. Reload mid-run to observe recovery.
+6. Ask: “Open conversation 1 in a pane, show a chart of three options with values 3, 5, 8, and highlight this turn.” Try a theme change or toast too; focus another attached tab to show action routing.
+7. Ask: “Use ask_user to ask whether I approve the next step, then tell me the answer.” Reload while the card is pending, optionally add a reason, and approve or reject. The waiting run continues.
+8. Ask: “Use stage_run to build a counter with a button, click the button twice, and return its visible count.” Interact with the widget yourself; reset it or reload to show the difference between durable conversations and a transient sandbox DOM.
+9. With God mode off, ask the agent to use `page_js` to retitle the page header: the tool refuses. Enable God mode, repeat, inspect the code card, and approve. Try again and reject: the page stays unchanged and the model sees the rejection.
 
 This demonstrates a native conversation/task/document runtime in the user's browser, not a claim that LangGraph lacks persistence or time travel. No custom orchestration graph or server-side transcript database is involved.
 
@@ -75,15 +83,23 @@ Browser tabs ── SharedWorker (Pi Durable harness + Web Lock)
                                       model provider
 ```
 
-The same account's tabs share one worker and every conversation's live stream. Each account has separate worker, IndexedDB, Web Lock, and pane-preference names. Tools read/write conversation-scoped workspace documents, update durable notes, or run JavaScript in a disposable worker against that conversation's frozen file snapshot. Forks use native `Conversation.fork()` and rewindable `fork: 'asOf'` documents. Foreground delegates own children through their tool task; background delegates use native anchor and reporter tasks with idempotent submission IDs. Safe reads and foreground delegation can replay after recovery; file writes and arbitrary JavaScript are marked unsafe and are not automatically replayed. CSP locks the app to its own origin; the JavaScript evaluator has `connect-src 'none'` and cannot create nested workers.
+The same account's tabs share one worker and every conversation's live stream. Each account has separate worker, IndexedDB, Web Lock, and pane-preference names. Workspace files and notes are conversation documents; `js_eval` runs in a disposable worker against that conversation's frozen file snapshot.
+
+Forks use native `Conversation.fork()` and rewindable `fork: 'asOf'` documents. Foreground delegates own children through their tool task; background delegates use native anchor and reporter tasks with idempotent submission IDs.
+
+Safe reads, UI rendering, approval waits, and foreground delegation can replay after recovery. File writes, `js_eval`, and sandbox execution are unsafe and are not automatically replayed. The guarded `page_js` task can reacquire its approval or cached result, but records an execution boundary so already-dispatched page code is not run again after a crash.
+
+CSP restricts the main app to its own origin. The evaluation worker and opaque-origin stage cannot fetch or create nested workers; approved main-page JavaScript can call the authenticated same-origin model proxy.
 
 ## Limits and trust
 
 - State lives in **that browser profile and origin**, not on the Node server. Different devices, profiles, or URLs do not share history.
 - Closing all tabs pauses the agent. Reopening restores persisted work; a reload while another tab/worker survives can keep a stream running. The browser may terminate background workers. In the Chromium demo, reloading mid-delegation created a new owner, restored the same three child IDs and parent tool call, restarted interrupted model generations from their saved request phase, and completed the parent's composed answer without duplicate children. It does not retain the exact in-flight token stream.
 - Browser storage can be evicted or cleared. This is not a backup system.
+- Stage DOM/window state is transient: reload, reset, or closing its pane discards it. A stage timeout stops waiting, not arbitrary JavaScript; reset replaces the iframe to stop asynchronous work. Synchronous infinite loops can freeze the renderer because an iframe is not a worker.
+- The main document now allows CSP `unsafe-eval` solely for approved `page_js`; the SharedWorker keeps its stricter policy. The default-off toggle and per-call card are demonstration controls, not a defense against hostile code once approved.
 - Your model provider sees prompts and tool results. The server keeps credentials locally but forwards requests to that provider.
-- The JavaScript tool can read the user's own browser-origin data, including IndexedDB. It cannot fetch out under its CSP. App-account namespacing is not a security sandbox against hostile JavaScript on the same origin: only share with people you trust.
+- `js_eval` can read the user's own browser-origin data, including IndexedDB, but cannot fetch under its worker CSP. Approved `page_js` can access origin data and authenticated same-origin endpoints. App-account namespacing is not a security sandbox against hostile JavaScript on the same origin: only share with people you trust.
 - Sharing a personal subscription with other people may breach the provider's terms. Check your plan before enabling multiple app accounts.
 - Use a current browser supporting SharedWorker, IndexedDB, and Web Locks. Keep the server running while using the app.
 

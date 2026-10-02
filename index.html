@@ -5,17 +5,18 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Pi in a tab · Branch workspace</title>
     <style>
-      :root { color-scheme: dark; --bg: #0b1219; --surface: #111d27; --line: #2a3b49; --muted: #99afbd; --accent: #8de1c5; }
+      :root { color-scheme: dark; --bg: #0b1219; --surface: #111d27; --line: #2a3b49; --muted: #99afbd; --accent: #8de1c5; --text: #e9f0f5; --control: #0c161f; --secondary: #1b2c38; --sidebar: #0e1821; --open: #172b36; --error: #ffaaa6; }
+      :root[data-theme="light"] { color-scheme: light; --bg: #f4f7f8; --surface: #fff; --line: #cad6dd; --muted: #536977; --text: #172a36; --control: #f5f8fa; --secondary: #e8eef2; --sidebar: #eef3f6; --open: #e0ede8; --error: #a42b27; }
       * { box-sizing: border-box; }
-      body { margin: 0; background: var(--bg); color: #e9f0f5; font: 14px system-ui, sans-serif; }
+      body { margin: 0; background: var(--bg); color: var(--text); font: 14px system-ui, sans-serif; }
       [hidden] { display: none !important; }
       button, input, select, textarea { font: inherit; }
       button { border: 1px solid transparent; border-radius: 7px; padding: 8px 12px; background: var(--accent); color: #12352a; cursor: pointer; }
       button:hover { filter: brightness(1.12); }
       button:disabled { opacity: .45; cursor: default; }
-      button.secondary { background: #1b2c38; color: #c8d9e3; border-color: var(--line); }
+      button.secondary { background: var(--secondary); color: var(--text); border-color: var(--line); }
       button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-      input, select, textarea { width: 100%; padding: 10px; background: #0c161f; color: #e9f0f5; border: 1px solid #3a5060; border-radius: 7px; }
+      input, select, textarea { width: 100%; padding: 10px; background: var(--control); color: var(--text); border: 1px solid var(--line); border-radius: 7px; }
       textarea { resize: vertical; }
       label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 5px; }
       h1, h2, h3, p { margin-top: 0; }
@@ -32,21 +33,21 @@
       #login, #setup { max-width: 520px; margin: 32px auto; padding: 24px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
       #login-submit { margin-top: 14px; }
       #app { display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: calc(100vh - 120px); }
-      .sidebar { border-right: 1px solid var(--line); padding: 22px 14px; background: #0e1821; min-width: 0; }
+      .sidebar { border-right: 1px solid var(--line); padding: 22px 14px; background: var(--sidebar); min-width: 0; }
       .sidebar h2 { padding: 0 9px; font-size: 13px; margin-bottom: 8px; }
       .sidebar > p { padding: 0 9px; font-size: 11px; }
       #branch-tree ul { list-style: none; margin: 0; padding-left: 13px; border-left: 1px solid var(--line); }
       #branch-tree > ul { padding-left: 0; border: 0; }
-      .branch { width: 100%; text-align: left; display: flex; gap: 8px; align-items: center; padding: 9px 8px; margin: 3px 0; background: transparent; color: #dce7ee; border-color: transparent; min-width: 0; }
-      .branch.open { background: #172b36; }
+      .branch { width: 100%; text-align: left; display: flex; gap: 8px; align-items: center; padding: 9px 8px; margin: 3px 0; background: transparent; color: var(--text); border-color: transparent; min-width: 0; }
+      .branch.open { background: var(--open); }
       .branch.active { border-color: var(--accent); }
       .branch-copy { min-width: 0; }
       .branch-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
       .branch-kind { font-size: 10px; color: var(--muted); }
       .branch-dot { width: 7px; height: 7px; border-radius: 50%; background: #5e7889; flex: 0 0 auto; }
-      .branch-dot.running { background: var(--accent); box-shadow: 0 0 9px #8de1c544; }
+      .branch-dot.running { background: var(--accent); box-shadow: 0 0 9px color-mix(in srgb, var(--accent) 30%, transparent); }
       .sidebar details { padding: 13px 9px; margin-top: 15px; border-top: 1px solid var(--line); font-size: 11px; }
-      summary { cursor: pointer; color: #bdced9; }
+      summary { cursor: pointer; color: var(--text); }
       .workspace { min-width: 0; padding: 20px; }
       .workspace-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
       .workspace-heading h2 { font-size: 16px; margin-bottom: 4px; }
@@ -55,7 +56,7 @@
       #panes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; }
       #panes[data-count="1"] { grid-template-columns: minmax(0, 1fr); max-width: 1060px; margin: auto; }
       .pane { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-      .pane.active { border-color: #659e95; }
+      .pane.active { border-color: var(--accent); }
       .pane-header { padding: 16px; border-bottom: 1px solid var(--line); }
       .pane-heading { display: flex; justify-content: space-between; align-items: start; gap: 10px; }
       .pane-heading h3 { font-size: 15px; margin-bottom: 4px; overflow-wrap: anywhere; }
@@ -71,12 +72,12 @@
       .fork-actions select { width: auto; font-size: 10px; padding: 4px; }
       .empty { padding: 45px 10px; text-align: center; font-size: 13px; }
       .live { color: var(--accent); margin: 12px 0; }
-      .tools { color: #bdd2dd; }
+      .tools { color: var(--muted); }
       .composer { padding: 14px 16px; border-top: 1px solid var(--line); }
       .composer textarea { min-height: 74px; font-size: 12px; }
       .composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
       .composer-footer small { font-size: 10px; }
-      .pane-error, #error, #login-error, #fork-error { color: #ffaaa6; white-space: pre-wrap; overflow-wrap: anywhere; }
+      .pane-error, #error, #login-error, #fork-error { color: var(--error); white-space: pre-wrap; overflow-wrap: anywhere; }
       .pane-error:empty, #error:empty { display: none; }
       .pane-error { font-size: 12px; margin: 10px 0 0; }
       .resources { border-top: 1px solid var(--line); padding: 0 16px; }
@@ -84,9 +85,9 @@
       .resources details + details { border-top: 1px solid var(--line); }
       .resources summary { font-size: 12px; }
       .notes-save { margin-top: 8px; font-size: 11px; }
-      .file-content { max-height: 240px; overflow: auto; padding: 12px; background: #0c161f; border-radius: 6px; }
+      .file-content { max-height: 240px; overflow: auto; padding: 12px; background: var(--control); border-radius: 6px; }
       .resource-hint { font-size: 11px; margin: 10px 0 0; }
-      dialog { width: min(700px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; padding: 24px; border: 1px solid #527668; border-radius: 14px; background: var(--surface); color: #e9f0f5; }
+      dialog { width: min(700px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; padding: 24px; border: 1px solid var(--accent); border-radius: 14px; background: var(--surface); color: var(--text); }
       dialog::backdrop { background: #040b13cc; backdrop-filter: blur(5px); }
       .dialog-heading, .dialog-actions { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
       .dialog-heading h2 { margin-bottom: 0; }
@@ -96,6 +97,28 @@
       .fork-branch legend { color: var(--accent); font-size: 12px; padding: 0 5px; }
       .dialog-actions { margin-top: 18px; justify-content: flex-end; }
       #login-message { color: var(--accent); }
+      .god-mode-control { padding: 0 9px 14px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+      .god-mode-control label { display: flex; align-items: center; gap: 8px; color: var(--text); }
+      #god-mode { width: auto; accent-color: var(--accent); }
+      .god-mode-control p { font-size: 11px; margin: 8px 0 0; }
+      .interactions:empty, .charts:empty { display: none; }
+      .interactions, .charts { border-top: 1px solid var(--line); padding: 12px 16px; }
+      .approval-card { padding: 12px; border: 1px solid var(--accent); border-radius: 8px; margin-bottom: 10px; }
+      .approval-card:last-child { margin-bottom: 0; }
+      .approval-card[data-status="done"], .approval-card[data-status="rejected"] { border-color: var(--line); }
+      .approval-card h4 { margin: 0 0 8px; font-size: 13px; }
+      .approval-card p { font-size: 12px; margin-bottom: 8px; white-space: pre-wrap; }
+      .approval-code { background: var(--control); padding: 10px; border-radius: 6px; max-height: 260px; overflow: auto; }
+      .approval-status { display: block; margin-bottom: 8px; white-space: pre-wrap; }
+      .approval-actions { display: flex; gap: 8px; margin-top: 8px; }
+      .chart { margin: 0 0 12px; }
+      .chart:last-child { margin-bottom: 0; }
+      .chart figcaption { font-weight: 600; margin-bottom: 8px; }
+      .chart svg { display: block; width: 100%; font: 14px system-ui, sans-serif; }
+      .stage-container iframe { display: block; width: 100%; height: 300px; border: 1px solid var(--line); border-radius: 7px; background: white; margin: 10px 0; }
+      .message.highlighted { background: color-mix(in srgb, var(--accent) 15%, transparent); box-shadow: inset 3px 0 var(--accent); padding-left: 10px; }
+      #toasts { position: fixed; bottom: 20px; right: 20px; z-index: 20; display: grid; gap: 8px; max-width: min(400px, calc(100vw - 40px)); pointer-events: none; }
+      .toast { padding: 12px 16px; border: 1px solid var(--accent); background: var(--surface); color: var(--text); border-radius: 9px; box-shadow: 0 8px 28px #0003; white-space: pre-wrap; overflow-wrap: anywhere; }
       @media (min-width: 1400px) { #panes[data-count="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); } #panes[data-count="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
       @media (max-width: 1050px) { #app { grid-template-columns: 190px minmax(0, 1fr); } #panes { grid-template-columns: minmax(0, 1fr); } }
       @media (max-width: 650px) { .masthead { padding: 16px; flex-direction: column; align-items: start; } #account { justify-content: flex-start; } #app { grid-template-columns: minmax(0, 1fr); } .sidebar { border-right: 0; border-bottom: 1px solid var(--line); } #branch-tree { max-height: 200px; overflow: auto; } .sidebar details { display: none; } .workspace { padding: 14px; } .transcript { height: 320px; } }
@@ -115,12 +138,13 @@
       <h2>Set up your model credentials</h2><p>No model credentials found. For OpenCode Go, add <code>OPENCODE_API_KEY</code> to your local <code>.env</code>. Other provider API keys work too.</p><p>For a subscription login, run <code>npm run login</code> in the repo. Already use Pi? Your <code>~/.pi/agent/auth.json</code> is picked up automatically.</p><p>Restart the server and reload this page after setup. Credentials never go to browser storage.</p>
     </section>
     <main id="app" hidden>
-      <aside class="sidebar"><h2>Branch explorer</h2><p>Open any branch to compare. Up to four panes; a fifth replaces the active pane.</p><nav id="branch-tree" aria-label="Conversations and subagents"></nav><details><summary>Local ownership & recovery</summary><pre id="ownership"></pre><pre id="recovered"></pre><p>Tabs share one browser owner. Reads replay safely; writes and arbitrary JavaScript do not.</p></details></aside>
+      <aside class="sidebar"><section class="god-mode-control"><label for="god-mode"><input id="god-mode" type="checkbox" disabled aria-describedby="god-mode-warning">God mode</label><p id="god-mode-warning">Off by default. Enables approved JavaScript in the main page with access to this account’s DOM, storage, and same-origin requests. Sandbox stage scripts stay isolated.</p></section><h2>Branch explorer</h2><p>Open any branch to compare. Up to four panes; a fifth replaces the active pane.</p><nav id="branch-tree" aria-label="Conversations and subagents"></nav><details><summary>Local ownership & recovery</summary><pre id="ownership"></pre><pre id="recovered"></pre><p>Tabs share one browser owner. Reads replay safely; writes and arbitrary JavaScript do not.</p></details></aside>
       <div class="workspace"><div class="workspace-heading"><div><h2>Explore in parallel</h2><p>Fork any turn. Give each direction its own instruction and model.</p></div><span id="pane-count">1 / 4 panes</span></div><p id="error" role="alert"></p><div id="panes" data-count="1"></div></div>
     </main>
     <dialog id="fork-dialog" aria-labelledby="fork-title">
       <form id="fork-form"><div class="dialog-heading"><h2 id="fork-title">Explore new directions</h2><button id="fork-close" type="button" class="secondary" aria-label="Close fork dialog">×</button></div><p id="fork-context"></p><label for="fork-count">Number of branches</label><select id="fork-count"><option value="1">1 branch</option><option value="2">2 branches</option><option value="3">3 branches</option><option value="4">4 branches</option></select><div id="fork-branches"></div><p id="fork-error" role="alert"></p><div class="dialog-actions"><button id="fork-cancel" type="button" class="secondary">Cancel</button><button id="fork-submit" type="submit">Create branches</button></div></form>
     </dialog>
+    <div id="toasts" role="status" aria-live="polite" aria-relevant="additions"></div>
     <script type="module" src="/client.js"></script>
   </body>
 </html>

@@ -31,14 +31,15 @@ if (!process.env.PI_TAB_USERS && [...allowedOrigins].some(origin => !isLoopback(
 const proxyHeaders = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip', 'tailscale-user-login', 'cf-connecting-ip'];
 await mkdir('dist', { recursive: true });
 const bundles = await build({
-  entryPoints: ['client.js', 'owner.js', 'eval-worker.js'], outdir: 'dist', write: false,
+  entryPoints: ['client.js', 'owner.js', 'eval-worker.js', 'stage.js'], outdir: 'dist', write: false,
   bundle: true, platform: 'browser', format: 'esm', minify: true
 });
 const index = await readFile('index.html');
-const hash = createHash('sha256').update(index).update(await readFile('server.mjs'));
+const stage = await readFile('stage.html');
+const hash = createHash('sha256').update(index).update(stage).update(await readFile('server.mjs'));
 for (const file of bundles.outputFiles) hash.update(file.contents);
 const buildId = hash.digest('hex');
-const assets = new Map([['/', index]]);
+const assets = new Map([['/', index], ['/stage.html', stage]]);
 for (const file of bundles.outputFiles) {
   const bytes = Buffer.concat([Buffer.from('const APP_BUILD_ID = ' + JSON.stringify(buildId) + ';\n'), file.contents]);
   await writeFile(file.path, bytes);
@@ -80,7 +81,11 @@ function admit(key, limit = 20) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${port}`);
   const evaluator = url.pathname === '/eval-worker.js';
-  res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'${evaluator ? " 'unsafe-eval'" : ''}; worker-src ${evaluator ? "'none'" : "'self'"}; style-src 'unsafe-inline'; connect-src ${evaluator ? "'none'" : "'self'"}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`);
+  const stagePage = url.pathname === '/stage.html';
+  const pageEval = url.pathname === '/';
+  res.setHeader('Content-Security-Policy', stagePage
+    ? "default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; worker-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+    : `default-src 'self'; script-src 'self'${evaluator || pageEval ? " 'unsafe-eval'" : ''}; worker-src ${evaluator ? "'none'" : "'self'"}; style-src 'unsafe-inline'; connect-src ${evaluator ? "'none'" : "'self'"}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`);
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   try {
@@ -115,7 +120,7 @@ const server = createServer(async (req, res) => {
       if (url.pathname === '/owner.js' && (!user || url.searchParams.get('user') !== user.id)) {
         return json(res, 401, { error: 'Sign in before opening a browser owner' });
       }
-      res.setHeader('Content-Type', url.pathname === '/' ? 'text/html' : 'text/javascript');
+      res.setHeader('Content-Type', url.pathname === '/' || stagePage ? 'text/html' : 'text/javascript');
       return res.end(req.method === 'HEAD' ? undefined : assets.get(url.pathname));
     }
     if (req.method === 'GET' && url.pathname === '/api/models') {

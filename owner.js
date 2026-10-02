@@ -5,6 +5,7 @@ import { JsonlStorage } from '@earendil-works/pi-durable/storage/jsonl';
 import { IndexedDBFileSystem } from './idb-fs.js';
 import { browserModels } from './proxy-model.js';
 import { createSubagents } from './subagents.js';
+import { Interactions, UISettings, createFrontendTools } from './frontend-tools.js';
 
 const userId = new URL(self.location.href).searchParams.get('user');
 if (!/^[a-zA-Z0-9_-]{1,64}$/.test(userId || '')) throw new Error('Invalid user namespace');
@@ -15,6 +16,8 @@ async function confirmedUser() {
   return user;
 }
 const ports = new Set();
+const focusOrder = new Map();
+let focusTick = 0;
 const state = { userId, ownerId: crypto.randomUUID(), buildId: APP_BUILD_ID, conversations: {}, openedAt: Date.now(), recovered: null };
 const Notes = defineDoc({ kind: 'tab.notes', version: 1, scope: 'conversation',
   history: 'rewindable', fork: 'asOf', initial: () => ({ text: '' }) });
@@ -62,12 +65,14 @@ function attachConversation(id) {
     const conversation = await harness.conversation(id, context);
     if (!conversation) throw new Error('Conversation not found');
     await configure(conversation);
+    await conversation.commit(async tx => { await tx.doc(Interactions, id); }, context);
     const node = (await harness.snapshot(Branches, context)).nodes[id];
     const record = state.conversations[id] = { ...node };
     const watches = [['view', await conversation.watch(context)],
       ['notes', await harness.watchDoc(Notes, id, context)],
       ['files', await harness.watchDoc(Workspace, id, context)],
-      ['agent', await harness.watchDoc(AgentDoc, id, context)]];
+      ['agent', await harness.watchDoc(AgentDoc, id, context)],
+      ['interactions', await harness.watchDoc(Interactions, id, context)]];
     for (const [channel, watch] of watches) {
       if (!watch) continue;
       record[channel] = watch.value;
@@ -81,10 +86,10 @@ function attachConversation(id) {
 
 // The tab executes arbitrary JS; the owner only brokers requests and durable files.
 const evaluations = new Map();
-function requestTab(type, payload, signal) {
+function requestTab(type, payload, signal, timeoutMs = 6000) {
   return new Promise((resolve, reject) => {
-    const port = ports.values().next().value;
-    if (!port) return reject(new Error('No tab available for evaluation'));
+    const port = [...ports].sort((a, b) => (focusOrder.get(b) || 0) - (focusOrder.get(a) || 0))[0];
+    if (!port) return reject(new Error('No attached tab available for frontend action'));
     const id = crypto.randomUUID();
     const finish = (error, value) => {
       clearTimeout(timeout);
@@ -92,8 +97,8 @@ function requestTab(type, payload, signal) {
       evaluations.delete(id);
       error ? reject(error) : resolve(value);
     };
-    const abort = () => finish(new Error('Evaluation aborted'));
-    const timeout = setTimeout(() => finish(new Error('Evaluation tab unavailable or timed out')), 6000);
+    const abort = () => finish(new Error('Tab action aborted'));
+    const timeout = setTimeout(() => finish(new Error('Tab action unavailable or timed out')), timeoutMs);
     signal?.addEventListener('abort', abort, { once: true });
     evaluations.set(id, finish);
     port.postMessage({ type, id, ...payload });
@@ -142,6 +147,8 @@ const ready = navigator.locks.request(`pi-in-a-tab-owner:${userId}`, async () =>
   registry.install(defineExtension({ name: 'browser-local', tools, sections: [section('preamble', () =>
     'You live entirely inside a browser SharedWorker. Conversations, notes and virtual files are in browser IndexedDB. Files and notes are private to your conversation; forks inherit them at the fork point. Be concise. Never repeat successful tools. Use delegate with a tasks array to run up to three independent subagents in parallel and compose their answers. Use delegate_background when the user wants you to answer immediately and receive the result later.', { tag: false })] }));
   registry.install(createSubagents({ Notes, Workspace, Branches, onConversation: attachConversation }));
+  registry.install(createFrontendTools({ requestTab, hasTab: () => ports.size > 0,
+    readGodMode: async () => (await harness.snapshot(UISettings, context))?.godMode === true }));
   const available = await (await fetch('/api/models')).json();
   catalog = available.models;
   if (!catalog.length) throw new Error('No model credentials; configure a key or run npm run login');
@@ -175,6 +182,10 @@ const ready = navigator.locks.request(`pi-in-a-tab-owner:${userId}`, async () =>
     branches.nodes[root.id] = { id: root.id, parentId: null, kind: 'root', title: 'Root' };
   }, context);
   state.recovered = await harness.inspect(context);
+  await harness.commit(async tx => { await tx.doc(UISettings); }, context);
+  const uiSettings = await harness.watchDoc(UISettings, context);
+  state.godMode = uiSettings.value.godMode;
+  uiSettings.start(async value => { state.godMode = value.godMode; publish(); });
   const branches = await harness.watchDoc(Branches, context);
   await Promise.all(Object.keys(branches.value.nodes).map(id => attachConversation(Number(id))));
   branches.start(async value => {
@@ -193,17 +204,18 @@ const ready = navigator.locks.request(`pi-in-a-tab-owner:${userId}`, async () =>
 self.onconnect = event => {
   const port = event.ports[0];
   ports.add(port);
+  focusOrder.set(port, 0);
   port.start();
   port.postMessage({ type: 'hello', buildId: APP_BUILD_ID });
   if (state.waitingForOwner) port.postMessage({ type: 'waiting' });
   port.onmessage = async event => {
     const { id, action, payload = {} } = event.data;
     try {
-      if (action === 'eval-result') {
+      if (action === 'eval-result' || action === 'tab-result') {
         evaluations.get(id)?.(payload.error ? new Error(payload.error) : null, payload.result);
         return;
       }
-      if (action === 'detach') { ports.delete(port); port.close(); return; }
+      if (action === 'detach') { ports.delete(port); focusOrder.delete(port); port.close(); return; }
       await initialization;
       await confirmedUser();
       if (action === 'erase') {
@@ -216,11 +228,24 @@ self.onconnect = event => {
       }
       let result;
       if (action === 'attach') result = state;
+      else if (action === 'focus') { focusOrder.set(port, ++focusTick); result = { focused: true }; }
+      else if (action === 'god-mode') {
+        await harness.commit(async tx => { (await tx.doc(UISettings)).godMode = payload.enabled === true; }, context);
+        result = { saved: true };
+      }
       else {
         const conversationId = payload.conversationId ?? root.id;
         if (!state.conversations[conversationId]) throw new Error('Unknown conversation');
         const conversation = await harness.conversation(conversationId, context);
-        if (action === 'model') {
+        if (action === 'answer') {
+          await conversation.commit(async tx => {
+            const card = (await tx.doc(Interactions, conversationId)).cards[payload.cardId];
+            if (!card || card.status !== 'pending') throw new Error('Approval card is no longer pending');
+            card.status = payload.approved === true ? 'approved' : 'rejected';
+            card.answerReason = String(payload.reason || '');
+          }, context);
+          result = { saved: true };
+        } else if (action === 'model') {
           const model = { provider: payload.provider, modelId: payload.modelId };
           checkModel(model);
           await configure(conversation, { model });
