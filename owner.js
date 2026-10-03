@@ -7,6 +7,7 @@ import { browserModels } from './proxy-model.js';
 import { createSubagents } from './subagents.js';
 import { Interactions, UISettings, createFrontendTools } from './frontend-tools.js';
 import { Forms, formTools, validateForm } from './forms.js';
+import { Reminders, reminderTools } from './reminders.js';
 
 const userId = new URL(self.location.href).searchParams.get('user');
 if (!/^[a-zA-Z0-9_-]{1,64}$/.test(userId || '')) throw new Error('Invalid user namespace');
@@ -66,7 +67,7 @@ function attachConversation(id) {
     const conversation = await harness.conversation(id, context);
     if (!conversation) throw new Error('Conversation not found');
     await configure(conversation);
-    await conversation.commit(async tx => { await tx.doc(Interactions, id); await tx.doc(Forms, id); }, context);
+    await conversation.commit(async tx => { await tx.doc(Interactions, id); await tx.doc(Forms, id); await tx.doc(Reminders, id); }, context);
     const node = (await harness.snapshot(Branches, context)).nodes[id];
     const record = state.conversations[id] = { ...node };
     const watches = [['view', await conversation.watch(context)],
@@ -74,7 +75,8 @@ function attachConversation(id) {
       ['files', await harness.watchDoc(Workspace, id, context)],
       ['agent', await harness.watchDoc(AgentDoc, id, context)],
       ['interactions', await harness.watchDoc(Interactions, id, context)],
-      ['forms', await harness.watchDoc(Forms, id, context)]];
+      ['forms', await harness.watchDoc(Forms, id, context)],
+      ['reminders', await harness.watchDoc(Reminders, id, context)]];
     for (const [channel, watch] of watches) {
       if (!watch) continue;
       record[channel] = watch.value;
@@ -147,6 +149,7 @@ const ready = navigator.locks.request(`pi-in-a-tab-owner:${userId}`, async () =>
   ];
   const registry = createRegistry();
   registry.install(formTools);
+  registry.install(reminderTools);
   registry.install(defineExtension({ name: 'browser-local', tools, sections: [section('preamble', () =>
     'You live entirely inside a browser SharedWorker. Conversations, notes and virtual files are in browser IndexedDB. Files and notes are private to your conversation; forks inherit them at the fork point. Be concise. Never repeat successful tools. Use delegate with a tasks array to run up to three independent subagents in parallel and compose their answers. Use delegate_background when the user wants you to answer immediately and receive the result later.', { tag: false })] }));
   registry.install(createSubagents({ Notes, Workspace, Branches, onConversation: attachConversation }));
@@ -240,7 +243,10 @@ self.onconnect = event => {
         const conversationId = payload.conversationId ?? root.id;
         if (!state.conversations[conversationId]) throw new Error('Unknown conversation');
         const conversation = await harness.conversation(conversationId, context);
-        if (action === 'form-draft' || action === 'form-submit') {
+        if (action === 'cancel-reminder') {
+          await conversation.commit(async tx => { const row = (await tx.doc(Reminders, conversationId)).items[payload.reminderId]; if (!row || row.status !== 'pending') throw new Error('Reminder is no longer pending'); row.status = 'cancelled'; }, context);
+          result = { saved: true };
+        } else if (action === 'form-draft' || action === 'form-submit') {
           const card = (await harness.snapshot(Forms, conversationId, context))?.cards[payload.cardId];
           if (!card || card.status !== 'pending') throw new Error('Form is no longer pending');
           const errors = action === 'form-submit' && !payload.cancelled ? validateForm(card.schema, payload.data) : [];

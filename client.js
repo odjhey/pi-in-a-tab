@@ -485,6 +485,8 @@ function createPane(id) {
   pane.interactions.setAttribute('aria-label', 'Approval requests');
   pane.formPanel = element('section', 'forms');
   pane.formPanel.setAttribute('aria-label', 'Schema forms');
+  pane.reminderPanel = element('section', 'reminders');
+  pane.reminderPanel.setAttribute('aria-label', 'Self-reminders');
   pane.chartPanel = element('section', 'charts');
   pane.chartPanel.setAttribute('aria-label', 'Conversation charts');
   const composer = element('div', 'composer');
@@ -548,7 +550,7 @@ function createPane(id) {
     pane.stageContainer, pane.stageReset);
   pane.stagePanel.ontoggle = () => { if (pane.stagePanel.open) ensureStage(pane); };
   resources.append(notes, files, pane.stagePanel);
-  pane.root.append(header, pane.transcript, pane.interactions, pane.formPanel, pane.chartPanel, composer, resources);
+  pane.root.append(header, pane.transcript, pane.interactions, pane.formPanel, pane.reminderPanel, pane.chartPanel, composer, resources);
   panes.set(id, pane);
   return pane;
 }
@@ -610,6 +612,15 @@ function renderPane(pane, conversation) {
   renderFile(pane);
   renderInteractions(pane, conversation);
   renderForms(pane, conversation, call);
+  pane.reminderPanel.replaceChildren();
+  for (const row of Object.values(conversation.reminders?.items || {})) {
+    const card = element('article', 'approval-card');
+    const clock = element('small', 'reminder-clock');
+    clock.dataset.dueAt = row.dueAt; clock.dataset.status = row.status;
+    card.append(element('p', '', row.message), clock);
+    if (row.status === 'pending') card.append(button('Cancel reminder', () => paneOperation(pane, () => call('cancel-reminder', { conversationId: pane.id, reminderId: row.id })), 'secondary'));
+    pane.reminderPanel.append(card);
+  }
   renderCharts(pane, conversation);
   updateControls(pane);
 }
@@ -888,3 +899,4 @@ $('god-mode').onchange = () => {
   });
 };
 void guard(refreshIdentity);
+setInterval(() => { for (const clock of document.querySelectorAll('.reminder-clock')) { const seconds = Math.ceil((Number(clock.dataset.dueAt) - Date.now()) / 1000); clock.textContent = clock.dataset.status === 'pending' ? (seconds > 0 ? 'Due in ' + seconds + 's' : 'Due now / overdue') : clock.dataset.status; } }, 1000);
