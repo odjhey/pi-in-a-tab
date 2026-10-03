@@ -144,6 +144,13 @@ const ready = navigator.locks.request(`pi-in-a-tab-owner:${userId}`, async () =>
         const files = (await api.snapshot(Workspace, api.conversationId, ctx))?.files || {};
         return text(await requestTab('evaluate', { code: args.code, files }, ctx.abortSignal));
       } }),
+    defineTool({ name: 'download_file', description: 'Provide a durable download link for an existing branch file in the focused tab. This does not publish to a server. HTML is generated untrusted code; user chooses when to download/open it.', replay: 'safe', parameters: Type.Object({ path: Type.String() }), execute: async (args, api, ctx) => {
+      const path = filePath(args.path);
+      const files = (await api.snapshot(Workspace, api.conversationId, ctx))?.files || {};
+      if (!Object.hasOwn(files, path)) throw new Error('Missing branch file');
+      await api.commit(async tx => { const doc = await tx.doc(Interactions, api.conversationId); doc.downloads ||= {}; doc.downloads[api.taskId] = { path }; }, ctx);
+      return text(JSON.stringify(await requestTab('frontend', { action: 'download_file', args: { path, content: files[path] }, conversationId: api.conversationId, actionId: api.taskId }, ctx.abortSignal)));
+    } }),
     defineTool({ name: 'set_notes', description: 'Replace this conversation’s durable notes (32 KiB maximum). Forks inherit notes as of the fork entry. Mutating: not automatically replayed.',
       replay: 'unsafe', parameters: Type.Object({ text: Type.String() }), execute: async (args, api, ctx) => {
         if (bytes(args.text) > FILE_LIMIT) throw new Error('Notes exceed 32 KiB');

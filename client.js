@@ -1,5 +1,6 @@
 import { createStage } from './stage-client.js';
 import { renderForms } from './form-client.js';
+import { deckPrompt, createDeckPanel, renderDeck, downloadFile, disposeDeck } from './deck-client.js';
 
 const $ = id => document.getElementById(id);
 const pending = new Map();
@@ -50,6 +51,7 @@ function updateControls(pane) {
   const running = !!live.run;
   pane.input.disabled = !enabled;
   pane.send.disabled = !enabled || running || pane.submitting;
+  pane.deckStarter.disabled = !enabled || running || pane.submitting;
   pane.model.disabled = !enabled || running || pane.changingModel;
   pane.notes.disabled = !enabled || pane.historyEntry !== undefined;
   pane.save.disabled = !enabled || pane.savingNotes || pane.historyEntry !== undefined;
@@ -95,7 +97,7 @@ async function api(path, body) {
 
 function detach() {
   ownerReady = false;
-  for (const pane of panes.values()) { pane.stage?.dispose(); pane.stage = undefined; }
+  for (const pane of panes.values()) { pane.stage?.dispose(); pane.stage = undefined; disposeDeck(pane); }
   if (worker) {
     worker.port.postMessage({ action: 'detach' });
     worker.port.close();
@@ -376,6 +378,12 @@ async function runPageJS(code) {
 }
 
 const frontendActions = {
+  download_file(args, frame) {
+    openConversation(frame.conversationId);
+    const pane = panes.get(frame.conversationId); downloadFile(pane, args);
+    pane.downloadPanel.scrollIntoView({ block: 'nearest' });
+    return { path: args.path, downloadLinkReady: true };
+  },
   open_pane(args, frame) {
     const id = args.conversation || frame.conversationId;
     if (!state?.conversations[id]) throw new Error('Conversation not found');
@@ -511,7 +519,8 @@ function createPane(id) {
     }
   };
   const footer = element('div', 'composer-footer');
-  footer.append(element('small', '', '⌘ / Ctrl + Enter to send'), pane.send);
+  pane.deckStarter = button('Deck studio', () => { pane.input.value = deckPrompt; pane.send.click(); }, 'secondary deck-starter');
+  footer.append(pane.deckStarter, element('small', '', '⌘ / Ctrl + Enter to send'), pane.send);
   pane.error = element('p', 'pane-error');
   pane.error.setAttribute('role', 'alert');
   composer.append(pane.input, footer, pane.error);
@@ -569,7 +578,8 @@ function createPane(id) {
   pane.customSummary = element('summary', '', 'Custom tools');
   pane.customCode = element('pre'); pane.customPanel.append(pane.customSummary, pane.customCode);
   resources.append(notes, files, pane.customPanel, pane.stagePanel);
-  pane.root.append(header, pane.transcript, pane.timeline, pane.interactions, pane.formPanel, pane.reminderPanel, pane.chartPanel, composer, resources);
+  const deckPanel = createDeckPanel(pane);
+  pane.root.append(header, pane.transcript, pane.timeline, pane.interactions, pane.formPanel, pane.reminderPanel, pane.chartPanel, deckPanel, pane.downloadPanel, composer, resources);
   panes.set(id, pane);
   return pane;
 }
@@ -648,6 +658,7 @@ function renderPane(pane, conversation) {
     pane.reminderPanel.append(card);
   }
   renderCharts(pane, conversation);
+  renderDeck(pane, conversation);
   updateControls(pane);
 }
 
@@ -684,7 +695,7 @@ function renderTree() {
 
 function renderWorkspace() {
   for (const [id, pane] of panes) {
-    if (!openIds.includes(id)) { pane.stage?.dispose(); pane.root.remove(); panes.delete(id); }
+    if (!openIds.includes(id)) { pane.stage?.dispose(); disposeDeck(pane); pane.root.remove(); panes.delete(id); }
   }
   let next = $('panes').firstElementChild;
   for (const id of openIds) {
