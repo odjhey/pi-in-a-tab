@@ -19,10 +19,9 @@ export function createCustomTools({ registry, requestTab, Workspace }) {
     if (!/^[a-z][a-z0-9_]{0,63}$/.test(args.name)) throw new Error('Use a lowercase tool name');
     if (args.parametersSchema?.type !== 'object') throw new Error('parametersSchema must have type object');
     checkSchema(args.parametersSchema);
-    const doc = await api.snapshot(CustomTools, api.conversationId, ctx);
     if (registry.snapshot().tools().some(({extension, tool}) => extension.name !== customExtensionName(api.conversationId) && !extension.name.startsWith('custom-tools:') && tool.name === args.name)) throw new Error('Name conflicts with a built-in tool');
     await api.commit(async tx => { (await tx.doc(CustomTools, api.conversationId)).definitions[args.name] = args; }, ctx);
-    install(api.conversationId, { definitions: { ...doc?.definitions, [args.name]: args } });
+    install(api.conversationId, await api.snapshot(CustomTools, api.conversationId, ctx));
     return text({ defined: args.name });
   } }), defineTool({ name: 'list_tools', description: 'List custom tools defined in this branch, including schemas and code.', replay: 'safe', parameters: Type.Object({}), execute: async (_, api, ctx) => text((await api.snapshot(CustomTools, api.conversationId, ctx))?.definitions || {}) }), defineTool({ name: 'remove_tool', description: 'Remove a custom tool from this branch; older forks keep their own definition.', replay: 'unsafe', parameters: Type.Object({ name: Type.String() }), execute: async (args, api, ctx) => {
     await api.commit(async tx => { const doc = await tx.doc(CustomTools, api.conversationId); if (!Object.hasOwn(doc.definitions, args.name)) throw new Error('No such custom tool'); delete doc.definitions[args.name]; }, ctx);

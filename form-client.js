@@ -13,7 +13,8 @@ export function createFormCard(value, send) {
   actions.className = 'approval-actions';
   let data = clone(value.draft ?? initial(value.schema)), timer, saving = Promise.resolve();
   const labels = new Map();
-  const save = () => { clearTimeout(timer); timer = setTimeout(() => { saving = saving.then(() => send('form-draft', { cardId: value.id, data })).catch(error => { errors.textContent = error.message; }); }, 150); };
+  const jsonData = () => JSON.parse(JSON.stringify(data ?? null));
+  const save = () => { clearTimeout(timer); timer = setTimeout(() => { const draft = jsonData(); saving = saving.then(() => send('form-draft', { cardId: value.id, data: draft })).catch(error => { errors.textContent = error.message; }); }, 150); };
   const build = (schema, path, get, set, required = false) => {
     const box = el('fieldset'); box.dataset.path = path;
     const label = el('legend', (schema.title || path.split('/').at(-1) || value.title) + (required ? ' *' : ''));
@@ -62,10 +63,12 @@ export function createFormCard(value, send) {
   fields.append(build(value.schema, '', () => data, v => { data = v; }));
   const submit = el('button', 'Submit form'), cancel = el('button', 'Cancel');
   const act = async cancelled => {
-    clearTimeout(timer); await saving; await send('form-draft', { cardId: value.id, data }); errors.replaceChildren(); for (const label of labels.values()) label.textContent = '';
+    clearTimeout(timer); errors.replaceChildren(); for (const label of labels.values()) label.textContent = '';
     submit.disabled = cancel.disabled = true;
     try {
-      const result = await send('form-submit', { cardId: value.id, data, cancelled });
+      await saving;
+      if (!cancelled) await send('form-draft', { cardId: value.id, data: jsonData() });
+      const result = await send('form-submit', { cardId: value.id, data: jsonData(), cancelled });
       for (const error of result.errors || []) { const target = labels.get(error.path); if (target) target.textContent += error.message + ' '; else errors.append(el('p', (error.path || 'Form') + ': ' + error.message)); }
     } catch (error) { errors.textContent = error.message; }
     finally { submit.disabled = cancel.disabled = false; }

@@ -11,6 +11,7 @@ export function checkSchema(schema) {
   const visit = (s, path) => {
     if (!s || typeof s !== 'object' || Array.isArray(s)) throw new Error('Invalid schema at ' + path);
     if (s.type !== undefined && !['object', 'array', 'string', 'number', 'integer', 'boolean'].includes(s.type)) throw new Error('Unsupported type at ' + path);
+    if (s.format === 'url') s.format = 'uri';
     if (s.$ref || s.patternProperties || s.anyOf || s.allOf || s.not) throw new Error('Unsupported schema keyword at ' + path);
     for (const key of ['minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems']) if (s[key] !== undefined && (typeof s[key] !== 'number' || !Number.isFinite(s[key]) || (key.includes('Length') || key.includes('Items')) && (!Number.isInteger(s[key]) || s[key] < 0))) throw new Error('Invalid ' + key + ' at ' + path);
     if (s.required !== undefined && (!Array.isArray(s.required) || !s.required.every(x => typeof x === 'string'))) throw new Error('Invalid required at ' + path);

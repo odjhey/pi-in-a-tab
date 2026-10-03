@@ -16,8 +16,9 @@ const Reminder = defineTask({ name: 'tab.reminder', version: 1, initial: input =
 }, abort: async (_, runtime, ctx) => { await runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx); } });
 export const reminderTools = defineExtension({ name: 'browser-reminders', tasks: [Reminder], tools: [defineTool({ name: 'schedule_reminder', description: 'Schedule a durable self-reminder by delaySeconds OR atISO. When due it becomes a follow-up input for you to act on, including lateness. Closed browsers do not run; overdue reminders fire on reopen.', replay: 'safe', parameters: Type.Object({ delaySeconds: Type.Optional(Type.Number()), atISO: Type.Optional(Type.String()), message: Type.String() }), execute: async (args, api, ctx) => {
   if ((args.delaySeconds !== undefined) === (args.atISO !== undefined)) throw new Error('Supply exactly one of delaySeconds or atISO');
-  const dueAt = args.atISO !== undefined ? Date.parse(args.atISO) : Date.now() + args.delaySeconds * 1000;
-  if (!Number.isFinite(dueAt) || args.delaySeconds < 0) throw new Error('Invalid reminder deadline');
+  const candidate = args.atISO !== undefined ? Date.parse(args.atISO) : Date.now() + args.delaySeconds * 1000;
+  if (!Number.isFinite(candidate) || args.delaySeconds < 0) throw new Error('Invalid reminder deadline');
+  const dueAt = await api.memo('deadline', candidate, ctx);
   await api.commit(async tx => { const doc = await tx.doc(Reminders, api.conversationId); if (!doc.items[api.taskId]) { const taskId = await tx.createTask(Reminder, { key: api.taskId, dueAt }, { ownership: { kind: 'conversation' }, background: true }); doc.items[api.taskId] = { id: api.taskId, taskId, dueAt, message: args.message, status: 'pending' }; } }, ctx);
   return { content: [{ type: 'text', text: JSON.stringify({ scheduled: true, dueAt, id: api.taskId }) }] };
 } })] });
