@@ -854,8 +854,8 @@ async function attach(confirmedUser) {
 async function refreshIdentity() {
   const identity = await api('me');
   loginRequired = identity.loginRequired;
-  if (identity.user) await attach(identity.user);
-  else showLogin();
+  if (!identity.user) showLogin();
+  else if (!ownerReady || identity.user.id !== user?.id) await attach(identity.user);
 }
 
 function showError(error) {
@@ -870,7 +870,7 @@ async function logout(erase) {
   if (erase && worker) await call('erase');
   await api('logout', {});
   showLogin();
-  authChanges.postMessage({ changed: true });
+  authChanges.postMessage({ changed: true, userId: null });
   if (erase) {
     await new Promise((resolve, reject) => {
       const request = indexedDB.deleteDatabase('pi-in-a-tab:' + leavingUser.id);
@@ -913,13 +913,18 @@ $('login-form').onsubmit = event => {
     const password = $('password').value;
     $('password').value = '';
     const { user: confirmed } = await api('login', { user: $('username').value, password });
-    authChanges.postMessage({ changed: true });
-    await attach(confirmed);
+    authChanges.postMessage({ changed: true, userId: confirmed.id });
+    if (!ownerReady || confirmed.id !== user?.id) await attach(confirmed);
   });
 };
 $('logout').onclick = () => guard(() => logout(false));
 $('erase').onclick = () => guard(() => logout(true));
-authChanges.onmessage = () => { showLogin(); void guard(refreshIdentity); };
+authChanges.onmessage = event => {
+  // Reauthentication as the same user must not unmount focused forms or discard unsaved edits.
+  // Logout, a different account, and older tabs without a userId still detach immediately.
+  if (!event.data.userId || event.data.userId !== user?.id) showLogin();
+  void guard(refreshIdentity);
+};
 window.addEventListener('pagehide', detach);
 window.addEventListener('focus', () => { if (ownerReady) void guard(() => call('focus')); });
 $('god-mode').onchange = () => {
