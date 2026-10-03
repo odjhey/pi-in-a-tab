@@ -8,6 +8,7 @@ import { createSubagents } from './subagents.js';
 import { Interactions, UISettings, createFrontendTools } from './frontend-tools.js';
 import { Forms, formTools, validateForm } from './forms.js';
 import { Reminders, reminderTools } from './reminders.js';
+import { CustomTools, customExtensionName, createCustomTools } from './custom-tools.js';
 
 const userId = new URL(self.location.href).searchParams.get('user');
 if (!/^[a-zA-Z0-9_-]{1,64}$/.test(userId || '')) throw new Error('Invalid user namespace');
@@ -35,6 +36,7 @@ let root;
 let harness;
 let fs;
 let catalog;
+let customTools;
 let resolveInitialization;
 let rejectInitialization;
 const initialization = new Promise((resolve, reject) => { resolveInitialization = resolve; rejectInitialization = reject; });
@@ -66,8 +68,9 @@ function attachConversation(id) {
   const attached = (async () => {
     const conversation = await harness.conversation(id, context);
     if (!conversation) throw new Error('Conversation not found');
-    await configure(conversation);
-    await conversation.commit(async tx => { await tx.doc(Interactions, id); await tx.doc(Forms, id); await tx.doc(Reminders, id); }, context);
+    await configure(conversation, { extensions: { add: [{ name: customExtensionName(id) }] } });
+    await conversation.commit(async tx => { await tx.doc(Interactions, id); await tx.doc(Forms, id); await tx.doc(Reminders, id); await tx.doc(CustomTools, id); }, context);
+    customTools.install(id, await harness.snapshot(CustomTools, id, context));
     const node = (await harness.snapshot(Branches, context)).nodes[id];
     const record = state.conversations[id] = { ...node };
     const watches = [['view', await conversation.watch(context)],
@@ -76,7 +79,8 @@ function attachConversation(id) {
       ['agent', await harness.watchDoc(AgentDoc, id, context)],
       ['interactions', await harness.watchDoc(Interactions, id, context)],
       ['forms', await harness.watchDoc(Forms, id, context)],
-      ['reminders', await harness.watchDoc(Reminders, id, context)]];
+      ['reminders', await harness.watchDoc(Reminders, id, context)],
+      ['customTools', await harness.watchDoc(CustomTools, id, context)]];
     for (const [channel, watch] of watches) {
       if (!watch) continue;
       record[channel] = watch.value;
@@ -155,13 +159,15 @@ const ready = navigator.locks.request(`pi-in-a-tab-owner:${userId}`, async () =>
   registry.install(createSubagents({ Notes, Workspace, Branches, onConversation: attachConversation }));
   registry.install(createFrontendTools({ requestTab, hasTab: () => ports.size > 0,
     readGodMode: async () => (await harness.snapshot(UISettings, context))?.godMode === true }));
+  customTools = createCustomTools({ registry, requestTab, Workspace });
+  registry.install(customTools.extension);
   const available = await (await fetch('/api/models')).json();
   catalog = available.models;
   if (!catalog.length) throw new Error('No model credentials; configure a key or run npm run login');
   const initial = catalog.find(model => model.provider + '/' + model.id === available.defaultModel) || catalog[0];
   const storage = await JsonlStorage.open('/session', fs, context, { fsync: true });
   harness = await Harness.open(storage, { models: browserModels(catalog, userId), registry,
-    settings: { retry: { enabled: false }, stream: { timeoutMs: 120000 } },
+    settings: { extensions: registry.snapshot().installed(), retry: { enabled: false }, stream: { timeoutMs: 120000 } },
     onReport: error => broadcast({ type: 'error', error: String(error) }) }, context);
   root = await harness.root(context, {
     agent: { model: { provider: initial.provider, modelId: initial.id }, thinkingLevel: 'low' },

@@ -565,7 +565,10 @@ function createPane(id) {
   pane.timelineFork = button('Fork from here', () => showFork(id, pane.historyEntry, 1), 'secondary');
   const liveButton = button('Back to live', () => { pane.historyRequest = (pane.historyRequest || 0) + 1; pane.historyEntry = undefined; pane.history = undefined; pane.notesDirty = false; renderPane(pane, state.conversations[id]); }, 'secondary');
   pane.timeline.append(pane.timelineLabel, pane.slider, pane.timelineFork, liveButton);
-  resources.append(notes, files, pane.stagePanel);
+  pane.customPanel = element('details', 'custom-tools');
+  pane.customSummary = element('summary', '', 'Custom tools');
+  pane.customCode = element('pre'); pane.customPanel.append(pane.customSummary, pane.customCode);
+  resources.append(notes, files, pane.customPanel, pane.stagePanel);
   pane.root.append(header, pane.transcript, pane.timeline, pane.interactions, pane.formPanel, pane.reminderPanel, pane.chartPanel, composer, resources);
   panes.set(id, pane);
   return pane;
@@ -633,6 +636,8 @@ function renderPane(pane, conversation) {
   renderFile(pane);
   renderInteractions(pane, conversation);
   renderForms(pane, conversation, call);
+  pane.customSummary.textContent = 'Custom tools · ' + Object.keys(conversation.customTools?.definitions || {}).length;
+  pane.customCode.textContent = Object.values(conversation.customTools?.definitions || {}).map(def => def.name + ': ' + def.description + '\n' + JSON.stringify(def.parametersSchema, null, 2) + '\n' + def.code).join('\n\n');
   pane.reminderPanel.replaceChildren();
   for (const row of Object.values(conversation.reminders?.items || {})) {
     const card = element('article', 'approval-card');
@@ -761,7 +766,7 @@ function evaluate(frame, owner) {
   const timeout = setTimeout(() => finish({ error: 'Evaluation timed out' }), 5000);
   evaluator.onmessage = event => finish(event.data);
   evaluator.onerror = event => finish({ error: event.message });
-  evaluator.postMessage({ code: frame.code, files: frame.files });
+  evaluator.postMessage({ code: frame.code, files: frame.files, args: frame.args });
 }
 
 async function attach(confirmedUser) {

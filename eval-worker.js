@@ -1,5 +1,5 @@
 self.onmessage = async event => {
-  const { code, files } = event.data;
+  const { code, files, args } = event.data;
   const fs = Object.freeze({
     list: () => Object.keys(files),
     read: path => {
@@ -9,7 +9,7 @@ self.onmessage = async event => {
   });
   try {
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-    const result = await new AsyncFunction('fs', '"use strict";\n' + code)(fs);
+    const result = await new AsyncFunction('fs', 'args', '"use strict";\n' + code)(fs, args);
     self.postMessage({ result: JSON.stringify(result) ?? 'undefined' });
   } catch (error) { self.postMessage({ error: error.message }); }
 };
