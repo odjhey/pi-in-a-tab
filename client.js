@@ -1,3 +1,5 @@
+import { showLocalModelStatus } from './local-model-ui.js';
+import { handleLocalModel } from './local-model-client.js';
 import { createStage } from './stage-client.js';
 import { renderForms } from './form-client.js';
 import { deckPrompt, createDeckPanel, renderDeck, downloadFile, disposeDeck } from './deck-client.js';
@@ -829,6 +831,8 @@ async function attach(confirmedUser) {
     }
     if (frame.error?.startsWith('Unknown action:')) { updated(); return; }
     if (frame.type === 'evaluate') return evaluate(frame, owner);
+    if (frame.type === 'local-model') return showLocalModelStatus(frame.status);
+    if (frame.type === 'local-generate' || frame.type === 'local-cancel') return handleLocalModel(frame, owner);
     if (frame.type === 'frontend') return void dispatchFrontend(frame, owner);
     if (frame.type === 'reply') {
       const request = pending.get(frame.id);
@@ -841,6 +845,7 @@ async function attach(confirmedUser) {
   };
   owner.onerror = event => showError(event.message);
   render(await call('attach'));
+  showLocalModelStatus(state.localModel);
   if (!ownerReady) return;
   if (document.hasFocus()) await call('focus');
   // Existing branch model choices belong to the durable agent, not this tab.

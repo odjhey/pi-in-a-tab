@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 import { credentials, loadEnvironment } from './credentials.mjs';
+import { localModel } from './local-model.js';
 
 await loadEnvironment();
 const host = process.env.HOST || '127.0.0.1';
@@ -31,7 +32,7 @@ if (!process.env.PI_TAB_USERS && [...allowedOrigins].some(origin => !isLoopback(
 const proxyHeaders = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip', 'tailscale-user-login', 'cf-connecting-ip'];
 await mkdir('dist', { recursive: true });
 const bundles = await build({
-  entryPoints: ['client.js', 'owner.js', 'eval-worker.js', 'stage.js'], outdir: 'dist', write: false,
+  entryPoints: ['client.js', 'owner.js', 'eval-worker.js', 'stage.js', 'webgpu-worker.js'], outdir: 'dist', write: false,
   bundle: true, platform: 'browser', format: 'esm', minify: true
 });
 const index = await readFile('index.html');
@@ -85,7 +86,7 @@ const server = createServer(async (req, res) => {
   const pageEval = url.pathname === '/';
   res.setHeader('Content-Security-Policy', stagePage
     ? "default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; worker-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
-    : `default-src 'self'; script-src 'self'${evaluator || pageEval ? " 'unsafe-eval'" : ''}; worker-src ${evaluator ? "'none'" : "'self'"}; style-src 'unsafe-inline'; connect-src ${evaluator ? "'none'" : "'self'"}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`);
+    : `default-src 'self'; script-src 'self'${evaluator || pageEval ? " 'unsafe-eval'" : ''}${url.pathname === '/webgpu-worker.js' ? " 'wasm-unsafe-eval'" : ''}; worker-src ${evaluator ? "'none'" : "'self'"}; style-src 'unsafe-inline'; connect-src ${evaluator ? "'none'" : "'self'"}${url.pathname === '/webgpu-worker.js' ? ' https://huggingface.co https://us.aws.cdn.hf.co https://raw.githubusercontent.com' : ''}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`);
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   try {
@@ -124,7 +125,7 @@ const server = createServer(async (req, res) => {
       return res.end(req.method === 'HEAD' ? undefined : assets.get(url.pathname));
     }
     if (req.method === 'GET' && url.pathname === '/api/models') {
-      return json(res, 200, { models: await models.getAvailable(), defaultModel: process.env.PI_MODEL || null });
+      return json(res, 200, { models: [...await models.getAvailable(), localModel], defaultModel: process.env.PI_MODEL || null });
     }
     if (req.method !== 'POST' || url.pathname !== '/api/model') return json(res, 404, { error: 'Not found' });
     const input = await body(req);

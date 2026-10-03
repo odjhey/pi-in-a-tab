@@ -9,6 +9,7 @@ import { Interactions, UISettings, createFrontendTools } from './frontend-tools.
 import { Forms, formTools, validateForm } from './forms.js';
 import { Reminders, reminderTools } from './reminders.js';
 import { CustomTools, customExtensionName, createCustomTools } from './custom-tools.js';
+import { createLocalProvider } from './webgpu-model.js';
 
 const userId = new URL(self.location.href).searchParams.get('user');
 if (!/^[a-zA-Z0-9_-]{1,64}$/.test(userId || '')) throw new Error('Invalid user namespace');
@@ -94,8 +95,9 @@ function attachConversation(id) {
 
 // The tab executes arbitrary JS; the owner only brokers requests and durable files.
 const evaluations = new Map();
-function requestTab(type, payload, signal, timeoutMs = 6000) {
+function requestTab(type, payload, signal, timeoutMs = 6000, onEvent) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error('Tab action aborted'));
     const port = [...ports].sort((a, b) => (focusOrder.get(b) || 0) - (focusOrder.get(a) || 0))[0];
     if (!port) return reject(new Error('No attached tab available for frontend action'));
     const id = crypto.randomUUID();
@@ -103,12 +105,13 @@ function requestTab(type, payload, signal, timeoutMs = 6000) {
       clearTimeout(timeout);
       signal?.removeEventListener('abort', abort);
       evaluations.delete(id);
+      if (error && onEvent) port.postMessage({ type: 'local-cancel', id });
       error ? reject(error) : resolve(value);
     };
     const abort = () => finish(new Error('Tab action aborted'));
     const timeout = setTimeout(() => finish(new Error('Tab action unavailable or timed out')), timeoutMs);
     signal?.addEventListener('abort', abort, { once: true });
-    evaluations.set(id, finish);
+    evaluations.set(id, { port, finish, onEvent });
     port.postMessage({ type, id, ...payload });
   });
 }
@@ -170,11 +173,12 @@ const ready = navigator.locks.request(`pi-in-a-tab-owner:${userId}`, async () =>
   registry.install(customTools.extension);
   const available = await (await fetch('/api/models')).json();
   catalog = available.models;
-  if (!catalog.length) throw new Error('No model credentials; configure a key or run npm run login');
   const initial = catalog.find(model => model.provider + '/' + model.id === available.defaultModel) || catalog[0];
   const storage = await JsonlStorage.open('/session', fs, context, { fsync: true });
-  harness = await Harness.open(storage, { models: browserModels(catalog, userId), registry,
-    settings: { extensions: registry.snapshot().installed(), retry: { enabled: false }, stream: { timeoutMs: 120000 } },
+  const models = browserModels(catalog.filter(model => model.provider !== 'webgpu-local'), userId);
+  models.setProvider(createLocalProvider(requestTab));
+  harness = await Harness.open(storage, { models, registry,
+    settings: { extensions: registry.snapshot().installed(), retry: { enabled: false }, stream: { timeoutMs: 600000 } },
     onReport: error => broadcast({ type: 'error', error: String(error) }) }, context);
   root = await harness.root(context, {
     agent: { model: { provider: initial.provider, modelId: initial.id }, thinkingLevel: 'low' },
@@ -230,11 +234,23 @@ self.onconnect = event => {
   port.onmessage = async event => {
     const { id, action, payload = {} } = event.data;
     try {
-      if (action === 'eval-result' || action === 'tab-result') {
-        evaluations.get(id)?.(payload.error ? new Error(payload.error) : null, payload.result);
+      if (action === 'eval-result' || action === 'tab-result' || action === 'tab-stream') {
+        const request = evaluations.get(id);
+        if (request?.port === port) {
+          if (action === 'tab-stream') request.onEvent?.(payload.event);
+          else request.finish(payload.error ? new Error(payload.error) : null, payload.result);
+        }
         return;
       }
-      if (action === 'detach') { ports.delete(port); focusOrder.delete(port); port.close(); return; }
+      if (action === 'local-status') {
+        state.localModel = { ...state.localModel, ...payload };
+        broadcast({ type: 'local-model', status: state.localModel });
+        return;
+      }
+      if (action === 'detach') {
+        for (const request of [...evaluations.values()]) if (request.port === port) request.finish(new Error('Tab detached during action'));
+        ports.delete(port); focusOrder.delete(port); port.close(); return;
+      }
       await initialization;
       await confirmedUser();
       if (action === 'erase') {

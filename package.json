@@ -16,6 +16,7 @@
     "@earendil-works/chord": "1.0.0",
     "@earendil-works/pi-ai": "1.0.0",
     "@earendil-works/pi-durable": "1.0.0",
+    "@mlc-ai/web-llm": "^0.2.85",
     "esbuild": "0.28.2",
     "proper-lockfile": "4.1.2"
   }
