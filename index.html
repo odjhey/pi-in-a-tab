@@ -122,6 +122,11 @@
       @media (min-width: 1400px) { #panes[data-count="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); } #panes[data-count="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
       @media (max-width: 1050px) { #app { grid-template-columns: 190px minmax(0, 1fr); } #panes { grid-template-columns: minmax(0, 1fr); } }
       @media (max-width: 650px) { .masthead { padding: 16px; flex-direction: column; align-items: start; } #account { justify-content: flex-start; } #app { grid-template-columns: minmax(0, 1fr); } .sidebar { border-right: 0; border-bottom: 1px solid var(--line); } #branch-tree { max-height: 200px; overflow: auto; } .sidebar details { display: none; } .workspace { padding: 14px; } .transcript { height: 320px; } }
+      .form-card fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 8px 0; min-width: 0; }
+      .form-card legend { font-size: 12px; padding: 0 5px; }
+      .form-card input:not([type=checkbox]), .form-card textarea, .form-card select { width: 100%; margin-top: 6px; }
+      .form-array-row { border-left: 2px solid var(--accent); padding-left: 8px; margin-bottom: 12px; }
+      .field-error { color: #ff9292; font-size: 12px; margin: 4px 0; }
     </style>
   </head>
   <body>

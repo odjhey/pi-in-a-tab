@@ -4,12 +4,15 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "engines": { "node": ">=22.19.0" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "start": "node server.mjs",
     "login": "node login.mjs"
   },
   "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
     "@earendil-works/chord": "1.0.0",
     "@earendil-works/pi-ai": "1.0.0",
     "@earendil-works/pi-durable": "1.0.0",

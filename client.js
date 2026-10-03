@@ -1,4 +1,5 @@
 import { createStage } from './stage-client.js';
+import { renderForms } from './form-client.js';
 
 const $ = id => document.getElementById(id);
 const pending = new Map();
@@ -446,7 +447,7 @@ async function dispatchFrontend(frame, owner) {
 
 function createPane(id) {
   const pane = { id, submitting: false, changingModel: false, savingNotes: false, notesDirty: false,
-    cards: new Map(), charts: new Map(), optimisticCharts: new Map() };
+    cards: new Map(), forms: new Map(), charts: new Map(), optimisticCharts: new Map() };
   pane.root = element('section', 'pane');
   pane.root.dataset.conversationId = id;
   pane.root.onpointerdown = () => activatePane(id);
@@ -482,6 +483,8 @@ function createPane(id) {
   pane.transcript.setAttribute('aria-label', 'Conversation transcript');
   pane.interactions = element('section', 'interactions');
   pane.interactions.setAttribute('aria-label', 'Approval requests');
+  pane.formPanel = element('section', 'forms');
+  pane.formPanel.setAttribute('aria-label', 'Schema forms');
   pane.chartPanel = element('section', 'charts');
   pane.chartPanel.setAttribute('aria-label', 'Conversation charts');
   const composer = element('div', 'composer');
@@ -545,7 +548,7 @@ function createPane(id) {
     pane.stageContainer, pane.stageReset);
   pane.stagePanel.ontoggle = () => { if (pane.stagePanel.open) ensureStage(pane); };
   resources.append(notes, files, pane.stagePanel);
-  pane.root.append(header, pane.transcript, pane.interactions, pane.chartPanel, composer, resources);
+  pane.root.append(header, pane.transcript, pane.interactions, pane.formPanel, pane.chartPanel, composer, resources);
   panes.set(id, pane);
   return pane;
 }
@@ -606,6 +609,7 @@ function renderPane(pane, conversation) {
   pane.fileSummary.textContent = 'Branch files · ' + paths.length;
   renderFile(pane);
   renderInteractions(pane, conversation);
+  renderForms(pane, conversation, call);
   renderCharts(pane, conversation);
   updateControls(pane);
 }
