@@ -3,7 +3,7 @@
 A small, local-first way to run Pi Durable in a browser without installing the Pi coding agent. The whole agent harness runs in a SharedWorker, with conversation history, notes, and virtual files persisted in IndexedDB. A tiny Node server serves the app and forwards model calls using **your own** model credentials; it never saves your conversations. Reload or open another tab and pick up where you left off.
 
 **Experimental demo — not safe for production or untrusted users.** This is a just-for-fun exploration of what Pi Durable unlocks, not a hardened agent service. Only use it with people you trust and credentials you are comfortable spending. **God mode (`page_js`) is especially dangerous:** after approval it runs code with the main app's privileges. Prompt injection can manipulate the UI, read or erase browser-origin data, and make authenticated model-proxy calls on your budget. Code approval is not a security sandbox.
-Generated custom tools are also untrusted code. They run in the network-blocked eval worker and are replay-unsafe, but can consume CPU/memory and produce misleading results. Downloaded generated HTML is not a sandbox: inspect it before opening outside this demo.
+Generated custom tools are also untrusted code. They run in the network-blocked eval worker and are replay-unsafe, but can consume CPU/memory and produce misleading results. The eval worker is same-origin, so it is not a security boundary for browser-local IndexedDB storage. Downloaded generated HTML is not a sandbox: inspect it before opening outside this demo.
 
 ## Branch workspace
 
