@@ -243,7 +243,10 @@ self.onconnect = event => {
         const conversationId = payload.conversationId ?? root.id;
         if (!state.conversations[conversationId]) throw new Error('Unknown conversation');
         const conversation = await harness.conversation(conversationId, context);
-        if (action === 'cancel-reminder') {
+        if (action === 'history') {
+          if (!state.conversations[conversationId].view.entries.some(entry => entry.id === payload.entryId)) throw new Error('Entry is not visible in this branch');
+          result = { entryId: payload.entryId, files: await harness.snapshotAsOf(Workspace, conversationId, payload.entryId, context), notes: await harness.snapshotAsOf(Notes, conversationId, payload.entryId, context) };
+        } else if (action === 'cancel-reminder') {
           await conversation.commit(async tx => { const row = (await tx.doc(Reminders, conversationId)).items[payload.reminderId]; if (!row || row.status !== 'pending') throw new Error('Reminder is no longer pending'); row.status = 'cancelled'; }, context);
           result = { saved: true };
         } else if (action === 'form-draft' || action === 'form-submit') {

@@ -51,8 +51,8 @@ function updateControls(pane) {
   pane.input.disabled = !enabled;
   pane.send.disabled = !enabled || running || pane.submitting;
   pane.model.disabled = !enabled || running || pane.changingModel;
-  pane.notes.disabled = !enabled;
-  pane.save.disabled = !enabled || pane.savingNotes;
+  pane.notes.disabled = !enabled || pane.historyEntry !== undefined;
+  pane.save.disabled = !enabled || pane.savingNotes || pane.historyEntry !== undefined;
   for (const node of pane.transcript.querySelectorAll('button, select')) node.disabled = !enabled;
   for (const card of pane.cards.values()) {
     const disabled = !enabled || card.status !== 'pending' || card.answering;
@@ -549,14 +549,30 @@ function createPane(id) {
   pane.stagePanel.append(element('p', 'resource-hint', 'Scripts run in an isolated iframe, without access to this page or browser storage.'),
     pane.stageContainer, pane.stageReset);
   pane.stagePanel.ontoggle = () => { if (pane.stagePanel.open) ensureStage(pane); };
+  pane.timeline = element('div', 'timeline');
+  pane.timelineLabel = element('small', '', 'Live files and notes');
+  pane.slider = element('input'); pane.slider.type = 'range'; pane.slider.min = 0; pane.slider.step = 1; pane.slider.setAttribute('aria-label', 'Time travel through transcript');
+  pane.slider.oninput = () => paneOperation(pane, async () => {
+    const entries = (state.conversations[id].view.entries || []).filter(entry => entry.kind !== 'pi.system');
+    const entry = entries[Number(pane.slider.value)];
+    const request = pane.historyRequest = (pane.historyRequest || 0) + 1;
+    pane.historyEntry = entry?.id;
+    pane.history = undefined;
+    if (entry) { const history = await call('history', { conversationId: id, entryId: entry.id }); if (request !== pane.historyRequest) return; pane.history = history; }
+    renderPane(pane, state.conversations[id]);
+    pane.transcript.querySelector('.highlighted')?.scrollIntoView({ block: 'nearest' });
+  });
+  pane.timelineFork = button('Fork from here', () => showFork(id, pane.historyEntry, 1), 'secondary');
+  const liveButton = button('Back to live', () => { pane.historyRequest = (pane.historyRequest || 0) + 1; pane.historyEntry = undefined; pane.history = undefined; pane.notesDirty = false; renderPane(pane, state.conversations[id]); }, 'secondary');
+  pane.timeline.append(pane.timelineLabel, pane.slider, pane.timelineFork, liveButton);
   resources.append(notes, files, pane.stagePanel);
-  pane.root.append(header, pane.transcript, pane.interactions, pane.formPanel, pane.reminderPanel, pane.chartPanel, composer, resources);
+  pane.root.append(header, pane.transcript, pane.timeline, pane.interactions, pane.formPanel, pane.reminderPanel, pane.chartPanel, composer, resources);
   panes.set(id, pane);
   return pane;
 }
 
 function renderFile(pane) {
-  const files = state.conversations[pane.id]?.files?.files || {};
+  const files = (pane.historyEntry !== undefined ? pane.history?.files : state.conversations[pane.id]?.files)?.files || {};
   pane.fileContent.textContent = files[pane.files.value] ?? 'No files yet. Ask this branch to create one.';
 }
 
@@ -572,10 +588,14 @@ function renderPane(pane, conversation) {
   const atBottom = pane.transcript.scrollHeight - pane.transcript.scrollTop - pane.transcript.clientHeight < 60;
   pane.transcript.replaceChildren();
   const entries = (conversation.view?.entries || []).filter(entry => entry.kind !== 'pi.system');
+  pane.slider.max = entries.length; pane.slider.value = pane.historyEntry === undefined ? entries.length : entries.findIndex(entry => entry.id === pane.historyEntry);
+  pane.slider.disabled = !entries.length;
+  pane.timelineLabel.textContent = pane.historyEntry === undefined ? 'Live files and notes' : 'Read-only as of #' + pane.historyEntry;
+  pane.timelineFork.disabled = pane.historyEntry === undefined;
   for (const entry of entries) {
     const row = element('div', 'message');
     row.dataset.entryId = entry.id;
-    row.classList.toggle('highlighted', pane.highlightedEntry === String(entry.id));
+    row.classList.toggle('highlighted', (pane.historyEntry ?? Number(pane.highlightedEntry)) === entry.id);
     row.append(element('small', '', `${entry.kind} · #${entry.id}`),
       element('div', 'message-body', (entry.model || []).map(messageText).join('\n')));
     const actions = element('div', 'fork-actions');
@@ -597,9 +617,10 @@ function renderPane(pane, conversation) {
   const tools = (live.tools || []).map(tool => `${tool.name} · ${tool.status}\n${typeof tool.output === 'string' ? tool.output : JSON.stringify(tool.output ?? '')}`).join('\n');
   if (tools) pane.transcript.append(element('pre', 'tools', tools));
   if (atBottom) pane.transcript.scrollTop = pane.transcript.scrollHeight;
-  if (!pane.notesDirty && document.activeElement !== pane.notes) pane.notes.value = conversation.notes?.text || '';
+  if (pane.historyEntry !== undefined) pane.notes.value = pane.history?.notes?.text || '';
+  else if (!pane.notesDirty && document.activeElement !== pane.notes) pane.notes.value = conversation.notes?.text || '';
   const selectedFile = pane.files.value;
-  const paths = Object.keys(conversation.files?.files || {}).sort();
+  const paths = Object.keys((pane.historyEntry !== undefined ? pane.history?.files : conversation.files)?.files || {}).sort();
   pane.files.replaceChildren();
   for (const path of paths) {
     const option = element('option', '', path);
