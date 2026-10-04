@@ -5,6 +5,21 @@ import { renderForms } from './form-client.js';
 import { deckPrompt, createDeckPanel, renderDeck, downloadFile, disposeDeck } from './deck-client.js';
 
 const $ = id => document.getElementById(id);
+const exploreExamples = [
+  {"id":"fork-compare","group":"Branches","title":"Fork and compare","shows":"One start, several directions, each with its own files.","prompt":"Write plan.txt containing \"v1: launch in March\" and save notes saying \"root plan\". Then reply PLAN READY.","next":"On the PLAN READY reply, click Fork ×N, pick ×2, and give one branch \"Rewrite plan.txt as an aggressive plan\" and the other \"Rewrite plan.txt as a cautious plan\". Compare Branch files in each pane, then reload."},
+  {"id":"time-travel","group":"Branches","title":"Time travel","shows":"Read any branch's files as they were at any message.","prompt":"Write a.txt containing \"one\". Then change a.txt to \"two\". Then change it to \"three\". Reply after each step.","next":"Drag the \"Live files and notes\" slider under the pane. Click Fork from here at \"two\"."},
+  {"id":"subagents","group":"Agents","title":"Subagents","shows":"The agent splits work across child agents you can watch.","prompt":"Use delegate to run three subagents in parallel: an optimist, a skeptic and a lawyer, each giving two sentences on \"AI agents that live in your browser\". Then combine their answers into a verdict.","next":"Click the children in the Branch explorer to watch them stream. Reload while they run."},
+  {"id":"background","group":"Agents","title":"Background subagent","shows":"The parent keeps talking while a child works.","prompt":"Use delegate_background to research the pros and cons of browser-local agents in detail. Reply immediately that you'll report back."},
+  {"id":"reminder","group":"Agents","title":"Reminders","shows":"The agent schedules its own follow-up, even across closed tabs.","prompt":"Use schedule_reminder to remind yourself in 60 seconds to write reminder.txt saying \"I came back\". Reply scheduled.","next":"Close every tab for this site, wait two minutes, reopen. The reminder fires late and says how late."},
+  {"id":"self-tools","group":"Agents","title":"Agent writes its own tool","shows":"New tools appear per branch.","prompt":"Use define_tool to create csv_stats(csv) that returns the count, sum and mean of comma-separated numbers. Then call it on \"3,4,5\".","next":"Open Custom tools to read its code. Fork from a message before the definition and ask list_tools."},
+  {"id":"form","group":"UI","title":"Forms on demand","shows":"The agent asks for structured input with a generated form.","prompt":"Use ask_form to plan a trip: destination (choice of Lisbon, Kyoto, Mexico City), start date, budget as a slider from 500 to 5000, and travellers as a list of {name, email}.","next":"Fill half of it, reload, finish and submit. Try an invalid email."},
+  {"id":"approval","group":"UI","title":"Approval that survives reload","shows":"The agent waits for your decision.","prompt":"Use ask_user to ask whether I approve publishing the plan, then tell me what I chose.","next":"Reload while the card is waiting, then Approve or Reject."},
+  {"id":"actions","group":"UI","title":"Frontend actions","shows":"The agent changes the app itself through named actions.","prompt":"Show a bar chart of five programming languages by popularity, switch the theme to light, and show a toast saying \"done\"."},
+  {"id":"stage","group":"UI","title":"Sandbox stage","shows":"The agent builds and clicks its own mini app in an isolated iframe.","prompt":"Use stage_run to build a tic-tac-toe board, play three moves in code, and return the board state."},
+  {"id":"god-mode","group":"UI","title":"God mode","shows":"Agent JavaScript in the real page, only after you approve the exact code.","prompt":"Use page_js to change the page header to \"Hacked by Pi\".","next":"First with God mode off (refused). Then turn God mode on, ask again, read the code card, approve."},
+  {"id":"deck","group":"UI","title":"Deck studio","shows":"Brief form, slides, approval, download."},
+  {"id":"local-model","group":"Models","title":"Model in your browser","shows":"Runs on your GPU with no server model calls (≈880 MB first download).","local":true,"prompt":"Tell me one fun fact about cats. Do not use tools."},
+];
 const pending = new Map();
 const evaluators = new Set();
 const panes = new Map();
@@ -52,8 +67,8 @@ function updateControls(pane) {
   const live = state?.conversations[pane.id]?.view?.docs?.['pi.live'] || {};
   const running = !!live.run;
   pane.input.disabled = !enabled;
-  pane.send.disabled = !enabled || running || pane.submitting;
-  pane.deckStarter.disabled = !enabled || running || pane.submitting;
+  pane.send.disabled = !enabled || running || pane.submitting || pane.changingModel;
+  for (const example of pane.explore.querySelectorAll('button')) example.disabled = pane.send.disabled;
   pane.model.disabled = !enabled || running || pane.changingModel;
   pane.notes.disabled = !enabled || pane.historyEntry !== undefined;
   pane.save.disabled = !enabled || pane.savingNotes || pane.historyEntry !== undefined;
@@ -219,6 +234,49 @@ async function paneOperation(pane, operation) {
   pane.error.textContent = '';
   try { await operation(); }
   catch (error) { pane.error.textContent = updateRequired ? updateMessage : safeError(error.message); }
+}
+
+async function submitPane(pane, input, example) {
+  if (!input || pane.send.disabled) return;
+  pane.submitting = true;
+  updateControls(pane);
+  try {
+    if (example?.local) {
+      const model = catalog.find(item => item.provider === 'webgpu-local');
+      if (!model) throw new Error('The browser-local model is unavailable');
+      await call('model', { conversationId: pane.id, provider: model.provider, modelId: model.id });
+    }
+    await call('submit', { conversationId: pane.id, content: input, requestId: crypto.randomUUID() });
+    if (!example && pane.input.value.trim() === input) pane.input.value = '';
+    pane.nextHint.textContent = example?.next ? 'Next: ' + example.next : '';
+    pane.hint.hidden = !example?.next;
+    pane.explore.open = false;
+  } finally { pane.submitting = false; updateControls(pane); }
+}
+
+function createExplore(pane) {
+  const panel = element('details', 'explore-panel');
+  panel.append(element('summary', '', 'Explore'));
+  const groups = element('div', 'explore-groups');
+  for (const group of ['Branches', 'Agents', 'UI', 'Models']) {
+    const section = element('section', 'explore-group');
+    section.append(element('h4', '', group));
+    for (const example of exploreExamples.filter(item => item.group === group)) {
+      const starter = example.id === 'deck' ? pane.deckStarter : button('', () =>
+        paneOperation(pane, () => submitPane(pane, example.prompt, example)), 'secondary');
+      starter.classList.add('explore-example');
+      starter.dataset.example = example.id;
+      starter.replaceChildren(element('strong', '', example.title), element('span', '', example.shows));
+      section.append(starter);
+    }
+    groups.append(section);
+  }
+  const context = element('p', 'explore-context', 'This is one side of Pi Durable. The same runtime also runs shared server agents, per-user sandboxes and approve-then-dispatch tasks. See the ');
+  const readme = element('a', '', 'README');
+  readme.href = 'https://github.com/odjhey/pi-in-a-tab#this-is-one-side-of-pi-durable';
+  context.append(readme, '.');
+  panel.append(groups, context);
+  return panel;
 }
 
 function ensureStage(pane) {
@@ -504,16 +562,7 @@ function createPane(id) {
   pane.input.rows = 3;
   pane.input.placeholder = 'Ask this branch to explore a direction…';
   pane.input.setAttribute('aria-label', 'Message to this branch');
-  pane.send = button('Send →', () => paneOperation(pane, async () => {
-    const input = pane.input.value.trim();
-    if (!input || pane.submitting) return;
-    pane.submitting = true;
-    updateControls(pane);
-    try {
-      await call('submit', { conversationId: id, content: input, requestId: crypto.randomUUID() });
-      if (pane.input.value.trim() === input) pane.input.value = '';
-    } finally { pane.submitting = false; updateControls(pane); }
-  }), '');
+  pane.send = button('Send →', () => paneOperation(pane, () => submitPane(pane, pane.input.value.trim())), '');
   pane.input.onkeydown = event => {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !pane.send.disabled) {
       event.preventDefault();
@@ -521,11 +570,19 @@ function createPane(id) {
     }
   };
   const footer = element('div', 'composer-footer');
-  pane.deckStarter = button('Deck studio', () => { pane.input.value = deckPrompt; pane.send.click(); }, 'secondary deck-starter');
-  footer.append(pane.deckStarter, element('small', '', '⌘ / Ctrl + Enter to send'), pane.send);
+  pane.deckStarter = button('Deck studio', () => paneOperation(pane, () => submitPane(pane, deckPrompt, exploreExamples.find(example => example.id === 'deck'))), 'secondary deck-starter');
+  footer.append(element('small', '', '⌘ / Ctrl + Enter to send'), pane.send);
   pane.error = element('p', 'pane-error');
   pane.error.setAttribute('role', 'alert');
   composer.append(pane.input, footer, pane.error);
+  pane.explore = createExplore(pane);
+  pane.hint = element('div', 'explore-hint');
+  pane.hint.hidden = true;
+  pane.nextHint = element('span');
+  pane.nextHint.setAttribute('role', 'status');
+  const dismissHint = button('×', () => { pane.hint.hidden = true; }, 'secondary');
+  dismissHint.setAttribute('aria-label', 'Dismiss next hint');
+  pane.hint.append(pane.nextHint, dismissHint);
   const resources = element('div', 'resources');
   const notes = element('details');
   notes.append(element('summary', '', 'Durable notes'));
@@ -581,7 +638,7 @@ function createPane(id) {
   pane.customCode = element('pre'); pane.customPanel.append(pane.customSummary, pane.customCode);
   resources.append(notes, files, pane.customPanel, pane.stagePanel);
   const deckPanel = createDeckPanel(pane);
-  pane.root.append(header, pane.transcript, pane.timeline, pane.interactions, pane.formPanel, pane.reminderPanel, pane.chartPanel, deckPanel, pane.downloadPanel, composer, resources);
+  pane.root.append(header, pane.explore, pane.hint, pane.transcript, pane.timeline, pane.interactions, pane.formPanel, pane.reminderPanel, pane.chartPanel, deckPanel, pane.downloadPanel, composer, resources);
   panes.set(id, pane);
   return pane;
 }
@@ -603,6 +660,11 @@ function renderPane(pane, conversation) {
   const atBottom = pane.transcript.scrollHeight - pane.transcript.scrollTop - pane.transcript.clientHeight < 60;
   pane.transcript.replaceChildren();
   const entries = (conversation.view?.entries || []).filter(entry => entry.kind !== 'pi.system');
+  const empty = !entries.length;
+  if (pane.empty !== empty) pane.explore.open = empty;
+  pane.empty = empty;
+  pane.transcript.hidden = empty;
+  pane.timeline.hidden = empty;
   pane.slider.max = entries.length; pane.slider.value = pane.historyEntry === undefined ? entries.length : entries.findIndex(entry => entry.id === pane.historyEntry);
   pane.slider.disabled = !entries.length;
   pane.timelineLabel.textContent = pane.historyEntry === undefined ? 'Live files and notes' : 'Read-only as of #' + pane.historyEntry;
@@ -626,7 +688,6 @@ function renderPane(pane, conversation) {
     row.append(actions);
     pane.transcript.append(row);
   }
-  if (!entries.length) pane.transcript.append(element('p', 'empty', 'A new direction starts here. Send a message to begin.'));
   const liveText = content(live.generation?.message?.content);
   if (liveText) pane.transcript.append(element('pre', 'live', liveText));
   const tools = (live.tools || []).map(tool => `${tool.name} · ${tool.status}\n${typeof tool.output === 'string' ? tool.output : JSON.stringify(tool.output ?? '')}`).join('\n');
