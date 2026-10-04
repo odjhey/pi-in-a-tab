@@ -1,11 +1,64 @@
 # Pi in a tab
 
-A small, local-first way to run Pi Durable in a browser without installing the Pi coding agent. The whole agent harness runs in a SharedWorker, with conversation history, notes, and virtual files persisted in IndexedDB. A tiny Node server serves the app and optionally forwards model calls using **your own** model credentials; or choose on-device WebGPU with no model credentials. The server never saves your conversations. Reload or open another tab and pick up where you left off.
+A whole AI agent that lives in your browser tab. The agent loop, its conversations, files, subagents, timers and approvals all run in a SharedWorker and are saved in IndexedDB. A tiny Node server only serves the page and forwards model calls with **your own** model credentials, or you can pick an on-device WebGPU model and skip the server's models entirely. The server never stores your conversations.
+
+It is built on [Pi Durable](https://earendil.com/posts/pi-durable/), Earendil's durable runtime for Pi agents. Pi Durable saves an agent's conversations, tasks and documents to storage as they change, so an agent can stop at any point (reload, crash, closed tab) and continue from where it was. This repo shows what that makes possible when the runtime sits in the browser.
 
 **Experimental demo — not safe for production or untrusted users.** This is a just-for-fun exploration of what Pi Durable unlocks, not a hardened agent service. Only use it with people you trust and credentials you are comfortable spending. Local WebGPU downloads third-party model/WASM artifacts and can exhaust GPU memory or browser storage; it does not make agent tools safer. **God mode (`page_js`) is especially dangerous:** after approval it runs code with the main app's privileges. Prompt injection can manipulate the UI, read or erase browser-origin data, and make authenticated model-proxy calls on your budget. Code approval is not a security sandbox.
 Generated custom tools are also untrusted code. They run in the network-blocked eval worker and are replay-unsafe, but can consume CPU/memory and produce misleading results. The eval worker is same-origin, so it is not a security boundary for browser-local IndexedDB storage. Downloaded generated HTML is not a sandbox: inspect it before opening outside this demo.
 
-## Branch workspace
+## What this demo is trying to show
+
+Agent frameworks such as LangGraph already have persistence, human-in-the-loop interrupts and time travel. The point here is where the agent lives and what that changes:
+
+- **No backend state.** Everything the agent knows is in your browser. Stop the Node server mid-task and nothing is lost; restart it and the next model call continues. Open DevTools, then Application, then IndexedDB to see the whole history.
+- **Branching is cheap.** Fork any message into up to four branches, each with its own model, files and notes as they were at that message, and watch them run side by side.
+- **Agents that wait and resume.** Approvals, forms and reminders are durable records, not in-memory promises. Reload while the agent is waiting and the same card is still there.
+- **The agent can reach the UI.** Named frontend actions, generated forms, a sandboxed stage for its own mini apps, and, if you allow it, JavaScript in the page.
+- **The model can be local too.** Run Qwen2.5 1.5B on your GPU and nothing leaves the device.
+
+## Explore it
+
+Sign in, then paste these into the message box of the Root pane. Each one shows a different part of the runtime. The Explore panel in the app has the same examples as one-click buttons.
+
+### Branches
+
+1. **Fork and compare.** Send: `Write plan.txt containing "v1: launch in March" and save notes saying "root plan". Then reply PLAN READY.` On that reply, click **Fork ×N**, pick ×2, and give one branch "Rewrite plan.txt as an aggressive plan" and the other "Rewrite plan.txt as a cautious plan". Pick a different model for each if you have two. Compare **Branch files** in the three panes, then reload. All three versions remain.
+2. **Time travel.** Send: `Write a.txt containing "one". Then change a.txt to "two". Then change it to "three". Reply after each step.` Drag the **Live files and notes** slider under the pane to see `a.txt` at each message. Click **Fork from here** at "two" to start a branch from that version.
+
+### Agents
+
+3. **Subagents.** Send: `Use delegate to run three subagents in parallel: an optimist, a skeptic and a lawyer, each giving two sentences on "AI agents that live in your browser". Then combine their answers into a verdict.` Click the children in the Branch explorer to watch them stream. Reload while they run; they resume without duplicates.
+4. **Background subagent.** Send: `Use delegate_background to research the pros and cons of browser-local agents in detail. Reply immediately that you'll report back.` The parent answers first and the child's report arrives later as a follow-up.
+5. **Reminders.** Send: `Use schedule_reminder to remind yourself in 60 seconds to write reminder.txt saying "I came back". Reply scheduled.` Close every tab for this site, wait two minutes and reopen. The reminder fires late, says how late, and writes the file.
+6. **The agent writes its own tool.** Send: `Use define_tool to create csv_stats(csv) that returns the count, sum and mean of comma-separated numbers. Then call it on "3,4,5".` Open **Custom tools** to read the code. Fork from a message before the definition and ask `list_tools`; that branch has no such tool.
+
+### UI
+
+7. **Forms on demand.** Send: `Use ask_form to plan a trip: destination (choice of Lisbon, Kyoto, Mexico City), start date, budget as a slider from 500 to 5000, and travellers as a list of {name, email}.` Fill half of it, reload, finish and submit. Try an invalid email to see validation.
+8. **Approval that survives reload.** Send: `Use ask_user to ask whether I approve publishing the plan, then tell me what I chose.` Reload while the card waits, then Approve or Reject.
+9. **Frontend actions.** Send: `Show a bar chart of five programming languages by popularity, switch the theme to light, and show a toast saying "done".`
+10. **Sandbox stage.** Send: `Use stage_run to build a tic-tac-toe board, play three moves in code, and return the board state.` The board runs in an isolated iframe with no network access.
+11. **God mode.** Send: `Use page_js to change the page header to "Hacked by Pi".` With **God mode** off the agent is refused. Turn it on, ask again, read the code on the approval card, and approve. Read the warning above first.
+12. **Deck studio.** Click **Deck studio**. Fill in the brief, flip through the slides, approve, and download `deck.html`. Fork the draft with "make it bold" and "make it playful" to compare two decks.
+
+### Models
+
+13. **A model in your browser.** In a pane's model picker choose **webgpu-local · Qwen2.5 1.5B**, then send `Tell me one fun fact about cats. Do not use tools.` The first load downloads about 880 MB; later loads take a few seconds. DevTools Network shows no `/api/model` calls. The model is small, so expect weak answers and failed tool calls.
+
+If you start the server yourself, set `PI_TAB_RATE_LIMIT=120` before trying forks and subagents. The default of 20 model requests per minute per user runs out quickly.
+
+## This is one side of Pi Durable
+
+Putting the whole runtime in a browser tab is one way to use Pi Durable. The same conversations, tasks, documents and timers run on a server too, and that opens different products. In separate local experiments we also ran:
+
+- **A shared server agent.** Several browser tabs, or several people, watch and steer the same live conversation. The conversation survived the server being killed and restarted.
+- **Per-user coding sandboxes.** Each user's agent edits and tests code in its own Docker container, and a read-only reviewer agent checks the work.
+- **Approve, then dispatch.** An agent proposes a change, a different person approves it, and a server task publishes it even after the requester closes the browser. It survived three forced kills and produced one published file. Exactly-once delivery came from an idempotent destination, not from Pi alone.
+
+Ideas we have not built yet include one durable agent per project or tenant (for example on Cloudflare Durable Objects), private drafts in the tab that are later published into a shared server room, and agents in Slack or Discord threads where each thread is a fork. If one of these fits your product, the primitives in this repo (forks, child agents, durable waits, timers, rewindable documents) are the same ones you would use.
+
+## Feature reference
 
 - A nested conversation tree and one to four live panes, each with its own model, transcript, notes, files, and composer. Click a branch to watch it.
 - Fork any transcript entry once or into two to four branches. Give each branch an optional instruction and model; instructed branches start in parallel. Forks of forks work.
@@ -25,27 +78,6 @@ Generated custom tools are also untrusted code. They run in the network-blocked 
 - `stage_run` builds and drives interactive DOM widgets inside a `sandbox="allow-scripts"` opaque-origin iframe. It returns the value, console messages, and runtime errors. The stage has its own CSP: `unsafe-eval` is allowed there, but network, nested workers, frames, and forms are blocked. `stage_reset` replaces the iframe.
 - `page_js(code, reason)` is refused unless the visible **God mode** toggle is on (off initially). Every call then requires a separate approval card showing the code and reason. Reject is reported back to the model. Pending approvals can resume; page JS already dispatched before a crash is not automatically run again.
 - `webgpu-local` runs Qwen2.5 1.5B q4 on your GPU in a dedicated worker spawned by the focused tab, with streaming text and native Qwen tool-call parsing bridged to the durable owner. No model credentials or `/api/model` requests; weights and WASM are cached in Cache Storage. Download/compile progress, load time, and generation speed appear above the panes.
-
-### Five-minute demo
-
-1. Set `PI_TAB_RATE_LIMIT=120` before starting if comparing several tool-using agents (the default remains 20 model requests/minute per signed-in user).
-2. Ask the root: “Write `comparison.txt` containing ROOT, save notes saying ROOT NOTES, then reply ready.” Wait for the final reply.
-3. On that final reply, choose **Fork ×N**, select two branches, and give each an instruction to read then change `comparison.txt` differently. Pick Azure for one and Codex for the other if both are configured. Watch them beside the root; expand each pane's files to compare. Reload: the branches, files, and notes remain.
-4. Ask the parent: “Use delegate with three tasks in one call: a product pitch, a skeptic's objection, and a technical explanation of browser-local agents. Compose their answers.” Open the three children from the tree while they stream.
-5. Ask: “Use delegate_background for a detailed comparison of browser-local versus server-side agents; immediately say you'll report back.” The parent replies first; the child's answer arrives later as a follow-up. Reload mid-run to observe recovery.
-6. Ask: “Open conversation 1 in a pane, show a chart of three options with values 3, 5, 8, and highlight this turn.” Try a theme change or toast too; focus another attached tab to show action routing.
-7. Ask: “Use ask_user to ask whether I approve the next step, then tell me the answer.” Reload while the card is pending, optionally add a reason, and approve or reject. The waiting run continues.
-8. Ask: “Use stage_run to build a counter with a button, click the button twice, and return its visible count.” Interact with the widget yourself; reset it or reload to show the difference between durable conversations and a transient sandbox DOM.
-9. With God mode off, ask the agent to use `page_js` to retitle the page header: the tool refuses. Enable God mode, repeat, inspect the code card, and approve. Try again and reject: the page stays unchanged and the model sees the rejection.
-10. Ask: “Plan a trip using ask_form: nested traveler name/email, destination choices, bounded days, travelers array of objects, interests array of strings, and multiline notes.” Enter a partial brief, reload, try an invalid email, then submit. Ask for a non-blocking show_form to send several structured follow-ups.
-11. Ask: “Schedule a reminder in 15 seconds to write reminder.txt saying I RETURNED; reply scheduled now.” Close all tabs, reopen after the deadline, and watch the overdue reminder drive the agent. Schedule another and cancel it from the pane.
-12. Ask the agent to change a file and notes twice. Drag the time-travel slider between the final replies to compare historical resources, then Fork from here and verify the fork inherits the older version.
-13. Ask: “Define csv_stats with a csv string parameter; return numeric row count, sum, and mean.” Next turn ask it to call csv_stats on 2,4,6. Fork before the definition and ask list_tools; then fork after it and compare inherited definitions.
-14. Click Deck studio, enter a generic topic/audience, and submit. Navigate the draft, reload the pending approval, approve, and download deck.html. Fork ×N from the draft's final reply with “make it bold” and “make it playful”; the inherited brief yields two comparable decks. Approve each branch separately to publish its own file.
-15. Select **webgpu-local · Qwen2.5 1.5B** and ask “Why is the sky blue? Do not use tools.” Watch the download/compile meter, then the streamed answer. Reload and ask again; cached weights avoid another download. DevTools → Network (including workers) shows no `/api/model` calls.
-16. Keep the parent on Azure, fork a reply with the local model selected, and compare both panes. Or ask Azure to delegate a short task using `model: {provider: "webgpu-local", modelId: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC"}`. Local subagents share one serialized engine per inference tab; the parent can continue using Azure.
-
-This demonstrates a native conversation/task/document runtime in the user's browser, not a claim that LangGraph lacks persistence or time travel. No custom orchestration graph or server-side transcript database is involved.
 
 ## Quickstart
 
